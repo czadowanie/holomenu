@@ -4,10 +4,6 @@ const c = @cImport({
     @cInclude("SDL2/SDL.h");
 });
 
-const SDLError = error{
-    SDLError,
-};
-
 pub fn Vec2(comptime T: type) type {
     return struct {
         x: T,
@@ -15,11 +11,11 @@ pub fn Vec2(comptime T: type) type {
     };
 }
 
-fn display_size() !Vec2(i32) {
+fn display_size() ?Vec2(i32) {
     var display_mode: c.SDL_DisplayMode = undefined;
     if (c.SDL_GetCurrentDisplayMode(0, &display_mode) != 0) {
         std.log.err("failed to get current display mode: {s}", .{c.SDL_GetError()});
-        return SDLError.SDLError;
+        return null;
     }
 
     return .{
@@ -38,7 +34,7 @@ pub fn main() !void {
     }
     defer c.SDL_Quit();
 
-    const display_dimensions = try display_size();
+    const display_dimensions = display_size().?;
 
     const window = c.SDL_CreateWindow("holomenu", 0, 0, display_dimensions.x, 26, c.SDL_WINDOW_SHOWN);
     defer c.SDL_DestroyWindow(window);
