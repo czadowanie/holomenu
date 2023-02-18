@@ -17,6 +17,7 @@ pub fn build(b: *std.build.Builder) void {
 
     exe.linkSystemLibrary("SDL2");
     exe.linkSystemLibrary("SDL2_ttf");
+    exe.linkSystemLibrary("fontconfig");
     exe.linkSystemLibrary("c");
 
     exe.install();
