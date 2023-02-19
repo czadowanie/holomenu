@@ -28,12 +28,75 @@ fn display_size() ?Vec2(i32) {
 }
 
 pub const HoloMenuConfig = struct {
-    height: u32 = 12,
+    height: ?i32,
+    font: ?[:0]const u8,
+
+    fn merge(self: *@This(), rhs: *const @This()) void {
+        self.* = @This(){
+            .height = if (rhs.height) |value| value else self.height,
+            .font = if (rhs.font) |value| value else self.font,
+        };
+    }
+
+    fn merge_from_file(self: *@This(), allocator: std.mem.Allocator, path: []const u8) !void {
+        const file = try std.fs.openFileAbsolute(path, .{});
+        defer file.close();
+
+        const contents = try file.readToEndAlloc(allocator, 1024 * 16); // 16kb should be more than enough
+        defer allocator.free(contents);
+
+        var parser = std.json.Parser.init(allocator, false);
+        defer parser.deinit();
+
+        var tree = try parser.parse(contents);
+        defer tree.deinit();
+
+        switch (tree.root) {
+            .Object => |obj| {
+                const rhs = @This(){
+                    .height = if (obj.getEntry("height")) |entry| switch (entry.value_ptr.*) {
+                        std.json.Value.Integer => |value| @intCast(i32, value),
+                        else => blk: {
+                            std.log.err("{s}: \"height\" should be an integer", .{path});
+                            break :blk null;
+                        },
+                    } else null,
+                    .font = if (obj.getEntry("font")) |entry| switch (entry.value_ptr.*) {
+                        .String => |value| blk: {
+                            var string = @ptrCast([:0]u8, try allocator.alloc(u8, value.len + 1));
+                            std.mem.copy(u8, string, value);
+                            string[value.len] = 0;
+                            break :blk string;
+                        },
+                        else => blk: {
+                            std.log.err("{s}: \"font\" should be a string", .{path});
+                            break :blk null;
+                        },
+                    } else null,
+                };
+
+                self.merge(&rhs);
+            },
+            else => {
+                std.log.err("expected object at top level of config", .{});
+            },
+        }
+    }
 };
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
+
+    var config = HoloMenuConfig{
+        .height = 24,
+        .font = "monospace:size=12",
+    };
+
+    const home = std.os.getenv("HOME").?;
+    const config_path = try std.mem.join(allocator, "/", &[_][]const u8{ home, ".config/holomenu.json" });
+    std.log.info("{s}", .{config_path});
+    try config.merge_from_file(allocator, config_path);
 
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         std.log.err("failed to init SDL: {s}", .{c.SDL_GetError()});
@@ -54,7 +117,7 @@ pub fn main() !void {
         0,
         0,
         display_dimensions.x,
-        26,
+        config.height.?,
         c.SDL_WINDOW_SHOWN,
     ).?;
 
@@ -74,7 +137,7 @@ pub fn main() !void {
     }
     var input = try stdin.readAllAlloc(alloc, 1024 * 1024);
 
-    const fc = try FontConfig.parse_and_resolve(allocator, "Iosevka:bold:italic:size=14");
+    const fc = try FontConfig.parse_and_resolve(allocator, config.font.?.ptr);
     defer fc.deinit();
 
     std.log.info("font path: \"{s}\", font size: {}", .{ fc.filepath, fc.size });
