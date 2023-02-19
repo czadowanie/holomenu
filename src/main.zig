@@ -27,6 +27,22 @@ fn display_size() ?Vec2(i32) {
     };
 }
 
+pub fn matches(pattern: []const u8, str: []const u8) bool {
+    if (pattern.len > str.len) {
+        return false;
+    }
+
+    var i: usize = 0;
+    while (i < pattern.len) {
+        if (pattern[i] != str[i]) {
+            return false;
+        }
+        i += 1;
+    }
+
+    return true;
+}
+
 pub const HoloMenuConfig = struct {
     height: ?i32,
     font: ?[:0]const u8,
@@ -146,6 +162,9 @@ pub fn main() !void {
     defer c.TTF_CloseFont(font);
 
     var running = true;
+
+    var textfield_content = std.ArrayList(u8).init(allocator);
+
     while (running) {
         // events
         var ev: c.SDL_Event = undefined;
@@ -159,7 +178,45 @@ pub fn main() !void {
                         c.SDLK_ESCAPE => {
                             running = false;
                         },
-                        else => {},
+                        c.SDLK_RETURN, c.SDLK_RETURN2 => {
+                            running = false;
+
+                            var lines = std.mem.tokenize(u8, input, "\n");
+                            while (lines.next()) |line| {
+                                if (matches(textfield_content.items, line)) {
+                                    const stdout = std.io.getStdOut().writer();
+                                    try stdout.print("{s}\n", .{line});
+                                }
+                            }
+                        },
+                        else => {
+                            std.log.info("{}", .{ev.key.keysym});
+
+                            if (ev.key.keysym.sym == c.SDLK_BACKSPACE) {
+                                std.log.info("backspace!", .{});
+                                _ = textfield_content.popOrNull();
+                            } else {
+                                const keyname = c.SDL_GetKeyName(ev.key.keysym.sym);
+                                std.log.info("keyname: {s}", .{keyname});
+                                if (keyname[0] != 0) {
+                                    if (std.mem.len(keyname) == 1) {
+                                        const sym = @intCast(u8, ev.key.keysym.sym);
+                                        const char = if (ev.key.keysym.mod == 1 or ev.key.keysym.mod == 2)
+                                            std.ascii.toUpper(sym)
+                                        else
+                                            sym;
+                                        try textfield_content.append(char);
+                                        std.log.info("{c}", .{char});
+                                    } else {
+                                        if (ev.key.keysym.sym == c.SDLK_SPACE) {
+                                            try textfield_content.append(' ');
+                                        }
+                                    }
+                                }
+                            }
+
+                            std.log.info("{s}", .{textfield_content.items});
+                        },
                     }
                 },
                 else => {},
@@ -169,35 +226,41 @@ pub fn main() !void {
         // render
         // TODO: this is extremely terrible
 
+        if (c.SDL_RenderClear(renderer) != 0) {
+            std.log.err("failed to clear!", .{});
+        }
+
         var lines = std.mem.tokenize(u8, input, "\n");
         const PADDING = 8;
         var x: i32 = PADDING;
         while (lines.next()) |line| {
-            const color = c.SDL_Color{ .r = 255, .g = 128, .b = 192, .a = 255 };
+            if (matches(textfield_content.items, line)) {
+                const color = c.SDL_Color{ .r = 255, .g = 128, .b = 192, .a = 255 };
 
-            var buf = try alloc.alloc(u8, line.len + 1);
-            defer alloc.free(buf);
+                var buf = try alloc.alloc(u8, line.len + 1);
+                defer alloc.free(buf);
 
-            std.mem.copy(u8, buf, line);
-            buf[line.len] = 0;
+                std.mem.copy(u8, buf, line);
+                buf[line.len] = 0;
 
-            const surface = c.TTF_RenderText_Solid(font, buf.ptr, color).?;
-            defer c.SDL_FreeSurface(surface);
+                const surface = c.TTF_RenderText_Solid(font, buf.ptr, color).?;
+                defer c.SDL_FreeSurface(surface);
 
-            const texture = c.SDL_CreateTextureFromSurface(renderer, surface);
-            defer c.SDL_DestroyTexture(texture);
+                const texture = c.SDL_CreateTextureFromSurface(renderer, surface);
+                defer c.SDL_DestroyTexture(texture);
 
-            const dst = c.SDL_Rect{
-                .x = x,
-                .y = 2,
-                .w = @ptrCast(*c.SDL_Surface, surface).w,
-                .h = @ptrCast(*c.SDL_Surface, surface).h,
-            };
+                const dst = c.SDL_Rect{
+                    .x = x,
+                    .y = 2,
+                    .w = @ptrCast(*c.SDL_Surface, surface).w,
+                    .h = @ptrCast(*c.SDL_Surface, surface).h,
+                };
 
-            x += dst.w + PADDING;
+                x += dst.w + PADDING;
 
-            if (c.SDL_RenderCopy(renderer, texture, null, &dst) != 0) {
-                std.log.err("failed to render copy: {s}", .{c.SDL_GetError()});
+                if (c.SDL_RenderCopy(renderer, texture, null, &dst) != 0) {
+                    std.log.err("failed to render copy: {s}", .{c.SDL_GetError()});
+                }
             }
         }
 
