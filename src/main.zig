@@ -100,7 +100,10 @@ pub fn main() !void {
         .height = config.height.?,
         // SAFETY: this should be fine since there's a default font that should always be set
         .font = config.font.?,
-    })).?;
+    })) orelse {
+        std.log.info("exiting without any option selected", .{});
+        return;
+    };
 
     const stdout = std.io.getStdOut().writer();
     try stdout.print("{s}\n", .{option});

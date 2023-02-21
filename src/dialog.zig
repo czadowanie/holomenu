@@ -45,11 +45,34 @@ fn display_size() DialogError![2]i32 {
     };
 }
 
+const CachedOption = struct {
+    texture: *c.SDL_Texture,
+    size: [2]i32,
+};
+
+const OptionsCache = struct {
+    options: []?CachedOption,
+};
+
 pub fn open_dialog(
     allocator: std.mem.Allocator,
     options: []const []const u8,
     config: DialogConfig,
 ) !?[]const u8 {
+    var options_cache = OptionsCache{
+        .options = try allocator.alloc(?CachedOption, options.len),
+    };
+    for (options_cache.options) |_, i| {
+        options_cache.options[i] = null;
+    }
+    defer {
+        for (options_cache.options) |option| {
+            if (option) |cached| {
+                c.SDL_DestroyTexture(cached.texture);
+            }
+        }
+    }
+
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         std.log.err("failed to init SDL: {s}", .{c.SDL_GetError()});
         return DialogError.SDLError;
@@ -84,6 +107,8 @@ pub fn open_dialog(
         std.log.err("failed to create a renderer: {s}", .{c.SDL_GetError()});
         return DialogError.SDLError;
     };
+
+    _ = c.SDL_RenderSetVSync(renderer, 1);
 
     defer c.SDL_DestroyRenderer(renderer);
 
@@ -155,7 +180,7 @@ pub fn open_dialog(
         }
 
         // render
-        // TODO: this is extremely terrible
+        // TODO: refactor
 
         if (c.SDL_RenderClear(renderer) != 0) {
             std.log.err("failed to clear!", .{});
@@ -192,37 +217,51 @@ pub fn open_dialog(
 
         const PADDING = 8;
         var x: i32 = TEXTFIELD_WIDTH;
-        for (options) |option| {
+        var i: usize = 0;
+        while (i < options.len and x < display_dimensions[0]) : (i += 1) {
+            const option = options[i];
+
             if (matches(textfield_content.items, option)) {
-                const color = c.SDL_Color{ .r = 255, .g = 128, .b = 192, .a = 255 };
+                if (options_cache.options[i]) |cached| {
+                    const dst = c.SDL_Rect{
+                        .x = x,
+                        .y = 2,
+                        .w = cached.size[0],
+                        .h = cached.size[1],
+                    };
 
-                var buf = try allocator.alloc(u8, option.len + 1);
-                defer allocator.free(buf);
+                    x += dst.w + PADDING;
 
-                std.mem.copy(u8, buf, option);
-                buf[option.len] = 0;
+                    if (c.SDL_RenderCopy(renderer, cached.texture, null, &dst) != 0) {
+                        std.log.err("failed to render copy: {s}", .{c.SDL_GetError()});
+                    }
+                } else {
+                    const color = c.SDL_Color{ .r = 255, .g = 128, .b = 192, .a = 255 };
 
-                const surface = c.TTF_RenderText_Solid(font, buf.ptr, color) orelse {
-                    std.log.err("failed to render a text surface: {s}", .{c.TTF_GetError()});
-                    return DialogError.SDLError;
-                };
+                    var buf = try allocator.alloc(u8, option.len + 1);
+                    defer allocator.free(buf);
 
-                defer c.SDL_FreeSurface(surface);
+                    std.mem.copy(u8, buf, option);
+                    buf[option.len] = 0;
 
-                const texture = c.SDL_CreateTextureFromSurface(renderer, surface);
-                defer c.SDL_DestroyTexture(texture);
+                    const surface = c.TTF_RenderText_Solid(font, buf.ptr, color) orelse {
+                        std.log.err("failed to render a text surface: {s}", .{c.TTF_GetError()});
+                        return DialogError.SDLError;
+                    };
 
-                const dst = c.SDL_Rect{
-                    .x = x,
-                    .y = 2,
-                    .w = @ptrCast(*c.SDL_Surface, surface).w,
-                    .h = @ptrCast(*c.SDL_Surface, surface).h,
-                };
+                    defer c.SDL_FreeSurface(surface);
+                    const texture = c.SDL_CreateTextureFromSurface(
+                        renderer,
+                        surface,
+                    ) orelse return DialogError.SDLError;
 
-                x += dst.w + PADDING;
-
-                if (c.SDL_RenderCopy(renderer, texture, null, &dst) != 0) {
-                    std.log.err("failed to render copy: {s}", .{c.SDL_GetError()});
+                    options_cache.options[i] = .{
+                        .texture = texture,
+                        .size = [2]i32{
+                            @ptrCast(*c.SDL_Surface, surface).w,
+                            @ptrCast(*c.SDL_Surface, surface).h,
+                        },
+                    };
                 }
             }
         }
