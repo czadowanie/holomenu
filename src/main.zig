@@ -17,7 +17,9 @@ pub const HoloMenuConfig = struct {
         const file = try std.fs.openFileAbsolute(path, .{});
         defer file.close();
 
-        const contents = try file.readToEndAlloc(allocator, 1024 * 16); // 16kb should be more than enough
+        // 16kb should be more than enough
+        const contents = try file.readToEndAlloc(allocator, 1024 * 16);
+
         defer allocator.free(contents);
 
         var parser = std.json.Parser.init(allocator, false);

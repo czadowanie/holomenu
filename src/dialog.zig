@@ -17,19 +17,25 @@ pub const DialogError = error{
 };
 
 fn matches(pattern: []const u8, str: []const u8) bool {
-    if (pattern.len > str.len) {
+    // if (pattern.len > str.len) {
+    //     return false;
+    // }
+
+    // var i: usize = 0;
+    // while (i < pattern.len) {
+    //     if (pattern[i] != str[i]) {
+    //         return false;
+    //     }
+    //     i += 1;
+    // }
+
+    // return true;
+
+    if (std.mem.indexOf(u8, str, pattern)) |_| {
+        return true;
+    } else {
         return false;
     }
-
-    var i: usize = 0;
-    while (i < pattern.len) {
-        if (pattern[i] != str[i]) {
-            return false;
-        }
-        i += 1;
-    }
-
-    return true;
 }
 
 fn display_size() DialogError![2]i32 {
@@ -45,13 +51,38 @@ fn display_size() DialogError![2]i32 {
     };
 }
 
-const CachedOption = struct {
-    texture: *c.SDL_Texture,
-    size: [2]i32,
-};
-
 const OptionsCache = struct {
-    options: []?CachedOption,
+    const Text = struct {
+        texture: *c.SDL_Texture,
+        size: [2]i32,
+    };
+
+    text: []?Text,
+    lowercase: []?[]u8,
+    allocator: std.mem.Allocator,
+
+    fn init(allocator: std.mem.Allocator, options_len: usize) !@This() {
+        const text = try allocator.alloc(?Text, options_len);
+        std.mem.set(?Text, text, null);
+
+        const lowercase = try allocator.alloc(?[]u8, options_len);
+        std.mem.set(?[]u8, lowercase, null);
+
+        return .{
+            .text = text,
+            .lowercase = lowercase,
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: @This()) void {
+        for (self.text) |text| {
+            if (text) |cached| {
+                c.SDL_DestroyTexture(cached.texture);
+            }
+        }
+        self.allocator.free(self.text);
+    }
 };
 
 pub fn open_dialog(
@@ -59,19 +90,8 @@ pub fn open_dialog(
     options: []const []const u8,
     config: DialogConfig,
 ) !?[]const u8 {
-    var options_cache = OptionsCache{
-        .options = try allocator.alloc(?CachedOption, options.len),
-    };
-    for (options_cache.options) |_, i| {
-        options_cache.options[i] = null;
-    }
-    defer {
-        for (options_cache.options) |option| {
-            if (option) |cached| {
-                c.SDL_DestroyTexture(cached.texture);
-            }
-        }
-    }
+    var options_cache = try OptionsCache.init(allocator, options.len);
+    defer options_cache.deinit();
 
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         std.log.err("failed to init SDL: {s}", .{c.SDL_GetError()});
@@ -132,6 +152,13 @@ pub fn open_dialog(
     var textfield_content = std.ArrayList(u8).init(allocator);
 
     while (running) {
+        var textfield_content_lowercase = try textfield_content.clone();
+        for (textfield_content_lowercase.items) |_, i| {
+            textfield_content_lowercase.items[i] = std.ascii.toLower(
+                textfield_content_lowercase.items[i],
+            );
+        }
+
         // events
         var ev: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&ev) != 0) {
@@ -147,8 +174,18 @@ pub fn open_dialog(
                         c.SDLK_RETURN, c.SDLK_RETURN2 => {
                             running = false;
 
-                            for (options) |option| {
-                                if (matches(textfield_content.items, option)) {
+                            for (options) |option, i| {
+                                const lowercase = if (options_cache.lowercase[i]) |value| value else blk: {
+                                    var lowercase = try allocator.alloc(u8, option.len);
+                                    for (option) |char, char_index| {
+                                        lowercase[char_index] = std.ascii.toLower(char);
+                                    }
+                                    options_cache.lowercase[i] = lowercase;
+
+                                    break :blk lowercase;
+                                };
+
+                                if (matches(textfield_content.items, lowercase)) {
                                     return option;
                                 }
                             }
@@ -188,6 +225,13 @@ pub fn open_dialog(
 
         const TEXTFIELD_WIDTH = 300;
 
+        const BG_COLOR = c.SDL_Color{
+            .r = 0,
+            .g = 0,
+            .b = 0,
+            .a = 255,
+        };
+
         if (textfield_content.items.len > 0) {
             const color = c.SDL_Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
@@ -197,7 +241,7 @@ pub fn open_dialog(
             std.mem.copy(u8, buf, textfield_content.items);
             buf[textfield_content.items.len] = 0;
 
-            const surface = c.TTF_RenderText_Solid(font, buf.ptr, color);
+            const surface = c.TTF_RenderText_Shaded(font, buf.ptr, color, BG_COLOR);
             defer c.SDL_FreeSurface(surface);
 
             const texture = c.SDL_CreateTextureFromSurface(renderer, surface);
@@ -215,14 +259,23 @@ pub fn open_dialog(
             }
         }
 
-        const PADDING = 8;
+        const PADDING = 16;
         var x: i32 = TEXTFIELD_WIDTH;
         var i: usize = 0;
         while (i < options.len and x < display_dimensions[0]) : (i += 1) {
             const option = options[i];
 
-            if (matches(textfield_content.items, option)) {
-                if (options_cache.options[i]) |cached| {
+            const lowercase = if (options_cache.lowercase[i]) |value| value else blk: {
+                var lowercase = try allocator.alloc(u8, option.len);
+                for (option) |char, char_index| {
+                    lowercase[char_index] = std.ascii.toLower(char);
+                }
+                options_cache.lowercase[i] = lowercase;
+
+                break :blk lowercase;
+            };
+            if (matches(textfield_content.items, lowercase)) {
+                if (options_cache.text[i]) |cached| {
                     const dst = c.SDL_Rect{
                         .x = x,
                         .y = 2,
@@ -244,7 +297,12 @@ pub fn open_dialog(
                     std.mem.copy(u8, buf, option);
                     buf[option.len] = 0;
 
-                    const surface = c.TTF_RenderText_Solid(font, buf.ptr, color) orelse {
+                    const surface = c.TTF_RenderText_Shaded(
+                        font,
+                        buf.ptr,
+                        color,
+                        BG_COLOR,
+                    ) orelse {
                         std.log.err("failed to render a text surface: {s}", .{c.TTF_GetError()});
                         return DialogError.SDLError;
                     };
@@ -255,7 +313,7 @@ pub fn open_dialog(
                         surface,
                     ) orelse return DialogError.SDLError;
 
-                    options_cache.options[i] = .{
+                    options_cache.text[i] = .{
                         .texture = texture,
                         .size = [2]i32{
                             @ptrCast(*c.SDL_Surface, surface).w,
