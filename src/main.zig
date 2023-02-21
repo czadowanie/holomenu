@@ -7,23 +7,20 @@ const c = @cImport({
     @cInclude("SDL2/SDL_ttf.h");
 });
 
-pub fn Vec2(comptime T: type) type {
-    return struct {
-        x: T,
-        y: T,
-    };
-}
+const DialogError = error{
+    SDLError,
+};
 
-fn display_size() ?Vec2(i32) {
+fn display_size() DialogError![2]i32 {
     var display_mode: c.SDL_DisplayMode = undefined;
     if (c.SDL_GetCurrentDisplayMode(0, &display_mode) != 0) {
         std.log.err("failed to get current display mode: {s}", .{c.SDL_GetError()});
-        return null;
+        return DialogError.SDLError;
     }
 
     return .{
-        .x = display_mode.w,
-        .y = display_mode.h,
+        display_mode.w,
+        display_mode.h,
     };
 }
 
@@ -109,14 +106,24 @@ pub fn main() !void {
         .font = "monospace:size=12",
     };
 
-    const home = std.os.getenv("HOME").?;
+    const stdin = std.io.getStdIn().reader();
+    if (stdin.context.isTty()) {
+        // TODO: display a help message instead
+        std.log.err("don't run me from terminal silly!", .{});
+        return;
+    }
+
+    const home = std.os.getenv("HOME") orelse {
+        std.log.err("$HOME is not set", .{});
+        return;
+    };
+
     const config_path = try std.mem.join(allocator, "/", &[_][]const u8{ home, ".config/holomenu.json" });
-    std.log.info("{s}", .{config_path});
     try config.merge_from_file(allocator, config_path);
 
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         std.log.err("failed to init SDL: {s}", .{c.SDL_GetError()});
-        return;
+        return DialogError.SDLError;
     }
     defer c.SDL_Quit();
 
@@ -126,39 +133,51 @@ pub fn main() !void {
     }
     defer c.TTF_Quit();
 
-    const display_dimensions = display_size().?;
+    const display_dimensions = try display_size();
 
     const window = c.SDL_CreateWindow(
         "holomenu",
         0,
         0,
-        display_dimensions.x,
+        display_dimensions[0],
+
+        // SAFETY: this should be fine since there's a default height that should always be set
         config.height.?,
-        c.SDL_WINDOW_SHOWN,
-    ).?;
+
+        c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_KEYBOARD_GRABBED,
+    ) orelse {
+        std.log.err("failed to create a window: {s}", .{c.SDL_GetError()});
+        return DialogError.SDLError;
+    };
 
     defer c.SDL_DestroyWindow(window);
 
-    const renderer = c.SDL_CreateRenderer(window, 0, c.SDL_RENDERER_ACCELERATED);
+    const renderer = c.SDL_CreateRenderer(window, 0, c.SDL_RENDERER_ACCELERATED) orelse {
+        std.log.err("failed to create a renderer: {s}", .{c.SDL_GetError()});
+        return DialogError.SDLError;
+    };
+
     defer c.SDL_DestroyRenderer(renderer);
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
 
-    const stdin = std.io.getStdIn().reader();
-
-    if (stdin.context.isTty()) {
-        std.log.err("don't run me from terminal silly!", .{});
-        return;
-    }
     var input = try stdin.readAllAlloc(alloc, 1024 * 1024);
 
-    const fc = try FontConfig.parse_and_resolve(allocator, config.font.?.ptr);
+    const fc = try FontConfig.parse_and_resolve(
+        allocator,
+
+        // SAFETY: this should be fine since there's a default font that should always be set
+        config.font.?.ptr,
+    );
     defer fc.deinit();
 
     std.log.info("font path: \"{s}\", font size: {}", .{ fc.filepath, fc.size });
 
-    const font = c.TTF_OpenFont(fc.filepath.ptr, fc.size).?;
+    const font = c.TTF_OpenFont(fc.filepath.ptr, fc.size) orelse {
+        std.log.err("failed to open font: {s}", .{c.TTF_GetError()});
+        return DialogError.SDLError;
+    };
     defer c.TTF_CloseFont(font);
 
     var running = true;
@@ -190,14 +209,10 @@ pub fn main() !void {
                             }
                         },
                         else => {
-                            std.log.info("{}", .{ev.key.keysym});
-
                             if (ev.key.keysym.sym == c.SDLK_BACKSPACE) {
-                                std.log.info("backspace!", .{});
                                 _ = textfield_content.popOrNull();
                             } else {
                                 const keyname = c.SDL_GetKeyName(ev.key.keysym.sym);
-                                std.log.info("keyname: {s}", .{keyname});
                                 if (keyname[0] != 0) {
                                     if (std.mem.len(keyname) == 1) {
                                         const sym = @intCast(u8, ev.key.keysym.sym);
@@ -206,7 +221,6 @@ pub fn main() !void {
                                         else
                                             sym;
                                         try textfield_content.append(char);
-                                        std.log.info("{c}", .{char});
                                     } else {
                                         if (ev.key.keysym.sym == c.SDLK_SPACE) {
                                             try textfield_content.append(' ');
@@ -214,8 +228,6 @@ pub fn main() !void {
                                     }
                                 }
                             }
-
-                            std.log.info("{s}", .{textfield_content.items});
                         },
                     }
                 },
@@ -230,9 +242,38 @@ pub fn main() !void {
             std.log.err("failed to clear!", .{});
         }
 
+        const TEXTFIELD_WIDTH = 300;
+
+        if (textfield_content.items.len > 0) {
+            const color = c.SDL_Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
+
+            var buf = try alloc.alloc(u8, textfield_content.items.len + 1);
+            defer alloc.free(buf);
+
+            std.mem.copy(u8, buf, textfield_content.items);
+            buf[textfield_content.items.len] = 0;
+
+            const surface = c.TTF_RenderText_Solid(font, buf.ptr, color);
+            defer c.SDL_FreeSurface(surface);
+
+            const texture = c.SDL_CreateTextureFromSurface(renderer, surface);
+            defer c.SDL_DestroyTexture(texture);
+
+            const dst = c.SDL_Rect{
+                .x = 0,
+                .y = 2,
+                .w = @ptrCast(*c.SDL_Surface, surface).w,
+                .h = @ptrCast(*c.SDL_Surface, surface).h,
+            };
+
+            if (c.SDL_RenderCopy(renderer, texture, null, &dst) != 0) {
+                std.log.err("failed to render copy: {s}", .{c.SDL_GetError()});
+            }
+        }
+
         var lines = std.mem.tokenize(u8, input, "\n");
         const PADDING = 8;
-        var x: i32 = PADDING;
+        var x: i32 = TEXTFIELD_WIDTH;
         while (lines.next()) |line| {
             if (matches(textfield_content.items, line)) {
                 const color = c.SDL_Color{ .r = 255, .g = 128, .b = 192, .a = 255 };
@@ -243,7 +284,11 @@ pub fn main() !void {
                 std.mem.copy(u8, buf, line);
                 buf[line.len] = 0;
 
-                const surface = c.TTF_RenderText_Solid(font, buf.ptr, color).?;
+                const surface = c.TTF_RenderText_Solid(font, buf.ptr, color) orelse {
+                    std.log.err("failed to render a text surface: {s}", .{c.TTF_GetError()});
+                    return DialogError.SDLError;
+                };
+
                 defer c.SDL_FreeSurface(surface);
 
                 const texture = c.SDL_CreateTextureFromSurface(renderer, surface);
