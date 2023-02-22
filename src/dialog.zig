@@ -322,20 +322,34 @@ pub fn open_dialog(
                             }
                         },
                         else => {
-                            const keyname = c.SDL_GetKeyName(ev.key.keysym.sym);
-                            if (keyname[0] != 0) {
-                                if (std.mem.len(keyname) == 1) {
-                                    const sym = @intCast(u8, ev.key.keysym.sym);
-                                    const char = if (ev.key.keysym.mod == 1 or ev.key.keysym.mod == 2)
-                                        std.ascii.toUpper(sym)
-                                    else
-                                        sym;
-                                    try textfield_content.append(char);
-                                    active = 0;
-                                } else {
-                                    if (ev.key.keysym.sym == c.SDLK_SPACE) {
-                                        try textfield_content.append(' ');
+                            if (ev.key.keysym.mod & c.KMOD_CTRL != 0) {
+                                switch (ev.key.keysym.sym) {
+                                    c.SDLK_j, c.SDLK_n => {
+                                        active += 1;
+                                    },
+                                    c.SDLK_k, c.SDLK_p => {
+                                        if (active != 0) {
+                                            active -= 1;
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            } else {
+                                const keyname = c.SDL_GetKeyName(ev.key.keysym.sym);
+                                if (keyname[0] != 0) {
+                                    if (std.mem.len(keyname) == 1) {
+                                        const sym = @intCast(u8, ev.key.keysym.sym);
+                                        const char = if (ev.key.keysym.mod == 1 or ev.key.keysym.mod == 2)
+                                            std.ascii.toUpper(sym)
+                                        else
+                                            sym;
+                                        try textfield_content.append(char);
                                         active = 0;
+                                    } else {
+                                        if (ev.key.keysym.sym == c.SDLK_SPACE) {
+                                            try textfield_content.append(' ');
+                                            active = 0;
+                                        }
                                     }
                                 }
                             }

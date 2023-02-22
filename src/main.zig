@@ -79,6 +79,7 @@ pub fn main() !void {
         try options.append(option);
     }
 
+    // TODO: this shouldn't be hardcoded actually
     const dialog_config = dialog.DialogConfig{
         .height = 24,
         .font_path = "/home/nm/.local/share/fonts/Iosevka Nerd Font Complete Mono Windows Compatible.ttf",
@@ -96,7 +97,6 @@ pub fn main() !void {
         .prompt_fg = hui.color(250, 240, 250, 255),
     };
 
-    // TODO: this shouldn't be hardcoded actually
     const option = (try dialog.open_dialog(
         allocator,
         options.items,
