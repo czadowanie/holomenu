@@ -237,7 +237,7 @@ pub fn open_dialog(
             0,
             display_dimensions[0],
             config.height,
-            c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_KEYBOARD_GRABBED,
+            c.SDL_WINDOW_SHOWN,
         );
         c.SDL_DestroyWindow(fixup_window);
     }
@@ -286,9 +286,19 @@ pub fn open_dialog(
     const padding_v = @divFloor(config.height - options_cache.text[0].size[1], 2);
     const padding = hui.Padding.initVH(padding_v, 12);
 
+    var delta_timer = try std.time.Timer.start();
+
+    // TODO: this should be configurable
+    var cursor_timer: f32 = 0;
+    const CURSOR_INTERVAL: f32 = 400.0;
+
     // LOOP
 
     while (running) {
+        _ = c.SDL_SetWindowInputFocus(window);
+        // delta time is ms
+        const dt: f32 = @intToFloat(f32, delta_timer.lap()) / (1000.0 * 1000.0);
+
         var textfield_content_lowercase = try textfield_content.clone();
         defer textfield_content_lowercase.deinit();
         for (textfield_content_lowercase.items) |_, i| {
@@ -420,6 +430,8 @@ pub fn open_dialog(
 
                 try drawRect(renderer, config.searchbar_bg, row_layout_x, 0, box.size);
 
+                var cursor_offset: i32 = 0;
+
                 if (textfield_content.items.len > 0) {
                     const text = try createText(
                         allocator,
@@ -436,6 +448,22 @@ pub fn open_dialog(
                         row_layout_x + box.content_offset[0],
                         box.content_offset[1],
                     );
+
+                    cursor_offset = text.size[0];
+                }
+
+                cursor_timer += dt;
+                if (cursor_timer < CURSOR_INTERVAL) {
+                    try drawRect(
+                        renderer,
+                        config.searchbar_fg,
+                        row_layout_x + box.content_offset[0] + cursor_offset + 2,
+                        box.content_offset[1] + 2,
+                        .{ 2, config.font_size },
+                    );
+                }
+                if (cursor_timer > CURSOR_INTERVAL * 2.0) {
+                    cursor_timer -= CURSOR_INTERVAL * 2.0;
                 }
 
                 row_layout_x += box.size[0];
@@ -443,26 +471,64 @@ pub fn open_dialog(
 
             // OPTIONS
 
+            // TODO: arrows should be configurable
+
+            const left_arrow_text = try createText(
+                allocator,
+                renderer,
+                font,
+                config.prompt_fg,
+                "<",
+            );
+            defer c.SDL_DestroyTexture(left_arrow_text.texture);
+            const left_arrow_box = hui.box(left_arrow_text.size, padding);
+
+            const right_arrow_text = try createText(
+                allocator,
+                renderer,
+                font,
+                config.prompt_fg,
+                ">",
+            );
+            defer c.SDL_DestroyTexture(right_arrow_text.texture);
+            const right_arrow_box = hui.box(right_arrow_text.size, padding);
+
             var start: usize = 0;
-            outer: while (true) {
-                var i: usize = start;
-                var x = row_layout_x;
-                inner: while (true) {
-                    const option_index = filtered.items[i];
-                    const text = options_cache.text[option_index];
-                    const box = hui.box(text.size, padding);
-                    const visible = x + box.size[0] < display_dimensions[0];
-                    if (!visible) {
-                        break :inner;
+            if (filtered.items.len > 0) {
+                outer: while (true) {
+                    var i: usize = start;
+                    var x = row_layout_x;
+                    inner: while (true) {
+                        const option_index = filtered.items[i];
+                        const text = options_cache.text[option_index];
+                        const box = hui.box(text.size, padding);
+                        const visible = x + box.size[0] < (display_dimensions[0] - left_arrow_box.size[0] - right_arrow_box.size[0]);
+                        if (!visible) {
+                            break :inner;
+                        }
+                        if (i == active) {
+                            break :outer;
+                        }
+                        x += box.size[0];
+                        i += 1;
                     }
-                    if (i == active) {
-                        break :outer;
-                    }
-                    x += box.size[0];
-                    i += 1;
+                    start += 1;
                 }
-                start += 1;
             }
+
+            if (start > 0) {
+                try drawRect(renderer, config.prompt_bg, row_layout_x, 0, left_arrow_box.size);
+                try renderText(
+                    renderer,
+                    left_arrow_text,
+                    row_layout_x + left_arrow_box.content_offset[0],
+                    left_arrow_box.content_offset[1],
+                );
+
+                row_layout_x += left_arrow_box.size[0];
+            }
+
+            var show_right_arrow = false;
 
             var i: usize = start;
             while (i < filtered.items.len) : (i += 1) {
@@ -472,6 +538,7 @@ pub fn open_dialog(
 
                 const visible = row_layout_x + box.size[0] < display_dimensions[0];
                 if (!visible) {
+                    show_right_arrow = true;
                     break;
                 }
 
@@ -493,6 +560,18 @@ pub fn open_dialog(
                 }
 
                 row_layout_x += box.size[0];
+            }
+
+            if (show_right_arrow) {
+                const arrow_box_x = display_dimensions[0] - right_arrow_box.size[0];
+
+                try drawRect(renderer, config.prompt_bg, arrow_box_x, 0, right_arrow_box.size);
+                try renderText(
+                    renderer,
+                    right_arrow_text,
+                    arrow_box_x + right_arrow_box.content_offset[0],
+                    right_arrow_box.content_offset[1],
+                );
             }
 
             // PRESENT
