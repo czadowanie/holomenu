@@ -26,6 +26,22 @@ pub const DialogConfig = struct {
     prompt_fg: hui.Color,
 };
 
+fn next_active(filtered_len: usize, current: usize) usize {
+    if (current < filtered_len - 1) {
+        return current + 1;
+    } else {
+        return 0;
+    }
+}
+
+fn prev_active(filtered_len: usize, current: usize) usize {
+    if (current > 0) {
+        return current - 1;
+    } else {
+        return filtered_len - 1;
+    }
+}
+
 fn drawRect(renderer: *c.SDL_Renderer, color: hui.Color, x: i32, y: i32, size: [2]i32) !void {
     if (c.SDL_SetRenderDrawColor(
         renderer,
@@ -281,8 +297,17 @@ pub fn open_dialog(
             );
         }
 
-        // events
+        // filter
+        var filtered = std.ArrayList(usize).init(allocator);
+        defer filtered.deinit();
+        for (options) |_, i| {
+            const lowercase = options_cache.lowercase[i];
+            if (matches(textfield_content.items, lowercase)) {
+                try filtered.append(i);
+            }
+        }
 
+        // events
         var ev: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&ev) != 0) {
             switch (ev.type) {
@@ -292,45 +317,28 @@ pub fn open_dialog(
                 c.SDL_KEYDOWN => {
                     switch (ev.key.keysym.sym) {
                         c.SDLK_ESCAPE => {
-                            running = false;
+                            return null;
                         },
                         c.SDLK_RETURN, c.SDLK_RETURN2 => {
-                            running = false;
-
-                            var pos: usize = 0;
-                            for (options) |option, i| {
-                                const lowercase = options_cache.lowercase[i];
-
-                                if (matches(textfield_content.items, lowercase)) {
-                                    if (pos == active) {
-                                        return option;
-                                    } else {
-                                        pos += 1;
-                                    }
-                                }
-                            }
+                            return options[filtered.items[active]];
                         },
                         c.SDLK_BACKSPACE => {
                             _ = textfield_content.popOrNull();
                         },
                         c.SDLK_RIGHT => {
-                            active += 1;
+                            active = next_active(filtered.items.len, active);
                         },
                         c.SDLK_LEFT => {
-                            if (active != 0) {
-                                active -= 1;
-                            }
+                            active = prev_active(filtered.items.len, active);
                         },
                         else => {
                             if (ev.key.keysym.mod & c.KMOD_CTRL != 0) {
                                 switch (ev.key.keysym.sym) {
                                     c.SDLK_j, c.SDLK_n => {
-                                        active += 1;
+                                        active = next_active(filtered.items.len, active);
                                     },
                                     c.SDLK_k, c.SDLK_p => {
-                                        if (active != 0) {
-                                            active -= 1;
-                                        }
+                                        active = prev_active(filtered.items.len, active);
                                     },
                                     else => {},
                                 }
@@ -435,76 +443,59 @@ pub fn open_dialog(
 
             // OPTIONS
 
-            var i: usize = 0;
-            var pos: usize = 0;
-
-            while (i < options.len and row_layout_x < display_dimensions[0]) : (i += 1) {
-                const lowercase = options_cache.lowercase[i];
-
-                if (matches(textfield_content.items, lowercase)) {
-                    const increment = if (pos == active) blk: {
-                        const text = try createText(
-                            allocator,
-                            renderer,
-                            font,
-                            config.active_fg,
-                            options[i],
-                        );
-                        defer c.SDL_DestroyTexture(text.texture);
-
-                        const box = hui.box(text.size, padding);
-
-                        // {
-                        //     const bg_color = config.active_bg;
-                        //     _ = c.SDL_SetRenderDrawColor(
-                        //         renderer,
-                        //         bg_color.r,
-                        //         bg_color.g,
-                        //         bg_color.b,
-                        //         bg_color.a,
-                        //     );
-                        //     _ = c.SDL_RenderFillRect(
-                        //         renderer,
-                        //         &c.SDL_Rect{
-                        //             .x = row_layout_x,
-                        //             .y = 0,
-                        //             .w = box.size[0],
-                        //             .h = box.size[1],
-                        //         },
-                        //     );
-                        // }
-
-                        try drawRect(renderer, config.active_bg, row_layout_x, 0, box.size);
-
-                        try renderText(
-                            renderer,
-                            text,
-                            row_layout_x + box.content_offset[0],
-                            box.content_offset[1],
-                        );
-
-                        break :blk box.size[0];
-                    } else blk: {
-                        const text = options_cache.text[i];
-
-                        const box = hui.box(text.size, padding);
-                        try renderText(
-                            renderer,
-                            text,
-                            row_layout_x + box.content_offset[0],
-                            box.content_offset[1],
-                        );
-
-                        break :blk box.size[0];
-                    };
-
-                    row_layout_x += increment;
-                    pos += 1;
+            var start: usize = 0;
+            outer: while (true) {
+                var i: usize = start;
+                var x = row_layout_x;
+                inner: while (true) {
+                    const option_index = filtered.items[i];
+                    const text = options_cache.text[option_index];
+                    const box = hui.box(text.size, padding);
+                    const visible = x + box.size[0] < display_dimensions[0];
+                    if (!visible) {
+                        break :inner;
+                    }
+                    if (i == active) {
+                        break :outer;
+                    }
+                    x += box.size[0];
+                    i += 1;
                 }
+                start += 1;
+            }
+
+            var i: usize = start;
+            while (i < filtered.items.len) : (i += 1) {
+                const option_index = filtered.items[i];
+                const text = options_cache.text[option_index];
+                const box = hui.box(text.size, padding);
+
+                const visible = row_layout_x + box.size[0] < display_dimensions[0];
+                if (!visible) {
+                    break;
+                }
+
+                if (i == active) {
+                    try drawRect(renderer, config.active_bg, row_layout_x, 0, box.size);
+                    try renderText(
+                        renderer,
+                        text,
+                        row_layout_x + box.content_offset[0],
+                        box.content_offset[1],
+                    );
+                } else {
+                    try renderText(
+                        renderer,
+                        text,
+                        row_layout_x + box.content_offset[0],
+                        box.content_offset[1],
+                    );
+                }
+
+                row_layout_x += box.size[0];
             }
 
             // PRESENT
-
             c.SDL_RenderPresent(renderer);
         }
     }
