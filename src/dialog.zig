@@ -32,18 +32,64 @@ pub const Color = struct {
     }
 };
 
+pub const Padding = struct {
+    t: i32,
+    r: i32,
+    b: i32,
+    l: i32,
+
+    pub fn init(t: i32, l: i32, b: i32, r: i32) @This() {
+        return .{
+            .t = t,
+            .r = r,
+            .b = b,
+            .l = l,
+        };
+    }
+
+    pub fn initVH(vertical: i32, horizontal: i32) @This() {
+        return .{
+            .t = vertical,
+            .b = vertical,
+            .r = horizontal,
+            .l = horizontal,
+        };
+    }
+};
+
+pub const LayoutBox = struct {
+    content_offset: [2]i32,
+    size: [2]i32,
+
+    pub fn init(content_size: [2]i32, padding: Padding) @This() {
+        return @This(){
+            .content_offset = [2]i32{
+                padding.r,
+                padding.t,
+            },
+            .size = [2]i32{
+                content_size[0] + padding.r + padding.l,
+                content_size[1] + padding.t + padding.b,
+            },
+        };
+    }
+};
+
 pub const color = Color.init;
 
 pub const DialogConfig = struct {
-    height: u32,
+    height: i32,
     font_path: []const u8,
-    font_size: u32,
+    font_size: i32,
     bg: Color,
     fg: Color,
     searchbar_bg: Color,
     searchbar_fg: Color,
-    searchbar_width: u32,
+    searchbar_width: i32,
     active_fg: Color,
+    prompt_show: bool,
+    prompt_text: []const u8,
+    prompt_fg: Color,
 };
 
 pub const DialogError = error{
@@ -156,6 +202,8 @@ pub fn open_dialog(
     options: []const []const u8,
     config: DialogConfig,
 ) !?[]const u8 {
+
+    // SETUP
     var options_cache = try OptionsCache.init(allocator, options.len);
     defer options_cache.deinit();
 
@@ -186,16 +234,18 @@ pub fn open_dialog(
         0,
         0,
         display_dimensions[0],
-
-        @intCast(i32, config.height),
-
+        config.height,
         c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_KEYBOARD_GRABBED,
     ) orelse {
         std.log.err("failed to create a window: {s}", .{c.SDL_GetError()});
         return DialogError.SDLError;
     };
-
     defer c.SDL_DestroyWindow(window);
+
+    var w: c_int = undefined;
+    var h: c_int = undefined;
+    c.SDL_GetWindowSizeInPixels(window, &w, &h);
+    std.log.info("window: {}x{}", .{ w, h });
 
     var renderer = c.SDL_CreateRenderer(window, 0, c.SDL_RENDERER_ACCELERATED) orelse {
         std.log.err("failed to create a renderer: {s}", .{c.SDL_GetError()});
@@ -211,7 +261,7 @@ pub fn open_dialog(
 
     defer c.SDL_DestroyRenderer(renderer);
 
-    const font = c.TTF_OpenFont(config.font_path.ptr, @intCast(c_int, config.font_size)) orelse {
+    const font = c.TTF_OpenFont(config.font_path.ptr, config.font_size) orelse {
         std.log.err("failed to open font: {s}", .{c.TTF_GetError()});
         return DialogError.SDLError;
     };
@@ -233,6 +283,10 @@ pub fn open_dialog(
     var running = true;
     var textfield_content = std.ArrayList(u8).init(allocator);
     var active: usize = 0;
+
+    const padding_v = @divFloor(config.height - options_cache.text[0].size[1], 2);
+    const padding = Padding.initVH(padding_v, 12);
+    std.log.info("padding: {}", .{padding});
 
     // LOOP
 
@@ -310,6 +364,8 @@ pub fn open_dialog(
 
         // render
         {
+            var row_layout_x: i32 = 0;
+
             // CLEAR
 
             if (c.SDL_SetRenderDrawColor(
@@ -325,28 +381,52 @@ pub fn open_dialog(
                 std.log.err("failed to clear!", .{});
             }
 
-            // SEARCHBAR
+            // PROMPT
+            if (config.prompt_show) {
+                const prompt_padding = Padding.init(padding_v, 0, padding_v, 12);
 
-            if (textfield_content.items.len > 0) {
                 const text = try createText(
                     allocator,
                     renderer,
                     font,
-                    config.searchbar_fg,
-                    textfield_content.items,
+                    config.prompt_fg,
+                    config.prompt_text,
                 );
                 defer c.SDL_DestroyTexture(text.texture);
-                try renderText(renderer, text, 0, 2);
+
+                const box = LayoutBox.init(text.size, prompt_padding);
+
+                try renderText(renderer, text, row_layout_x + box.content_offset[0], box.content_offset[1]);
+
+                row_layout_x += box.size[0];
+            }
+
+            // SEARCHBAR
+            {
+                const box = LayoutBox.init(.{ config.searchbar_width, config.height }, padding);
+
+                if (textfield_content.items.len > 0) {
+                    const text = try createText(
+                        allocator,
+                        renderer,
+                        font,
+                        config.searchbar_fg,
+                        textfield_content.items,
+                    );
+                    defer c.SDL_DestroyTexture(text.texture);
+
+                    try renderText(renderer, text, row_layout_x + box.content_offset[0], box.content_offset[1]);
+                }
+
+                row_layout_x += box.size[0];
             }
 
             // OPTIONS
 
-            const PADDING = 16;
-            var x: i32 = @intCast(i32, config.searchbar_width);
             var i: usize = 0;
             var pos: usize = 0;
 
-            while (i < options.len and x < display_dimensions[0]) : (i += 1) {
+            while (i < options.len and row_layout_x < display_dimensions[0]) : (i += 1) {
                 const lowercase = options_cache.lowercase[i];
 
                 if (matches(textfield_content.items, lowercase)) {
@@ -359,15 +439,21 @@ pub fn open_dialog(
                             options[i],
                         );
                         defer c.SDL_DestroyTexture(text.texture);
-                        try renderText(renderer, text, x, 2);
-                        break :blk text.size[0];
+
+                        const box = LayoutBox.init(text.size, padding);
+                        try renderText(renderer, text, row_layout_x + box.content_offset[0], box.content_offset[1]);
+
+                        break :blk box.size[0];
                     } else blk: {
                         const text = options_cache.text[i];
-                        try renderText(renderer, text, x, 2);
-                        break :blk text.size[0];
+
+                        const box = LayoutBox.init(text.size, padding);
+                        try renderText(renderer, text, row_layout_x + box.content_offset[0], box.content_offset[1]);
+
+                        break :blk box.size[0];
                     };
 
-                    x += increment + PADDING;
+                    row_layout_x += increment;
                     pos += 1;
                 }
             }

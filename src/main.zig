@@ -80,7 +80,7 @@ pub fn main() !void {
 
     // TODO: this shouldn't be hardcoded actually
     const option = (try dialog.open_dialog(allocator, options.items, .{
-        .height = 24,
+        .height = 32,
         .font_path = "/home/nm/.local/share/fonts/Iosevka Nerd Font Complete Mono Windows Compatible.ttf",
         .font_size = 14,
         .bg = dialog.color(15, 15, 20, 255),
@@ -88,7 +88,10 @@ pub fn main() !void {
         .searchbar_bg = dialog.color(30, 30, 20, 255),
         .searchbar_fg = dialog.color(250, 230, 230, 255),
         .searchbar_width = 300,
-        .active_fg = dialog.color(240, 40, 220, 255),
+        .active_fg = dialog.color(192, 100, 240, 255),
+        .prompt_show = true,
+        .prompt_fg = dialog.color(192, 100, 240, 255),
+        .prompt_text = "holomenu  ==> ",
     })) orelse {
         std.log.info("exiting without any option selected", .{});
         return;
