@@ -47,7 +47,10 @@ pub const FontConfig = struct {
         ).?;
         _ = c.FcFontSetAdd(font_set, font_pattern);
 
-        const font = c.FcPatternFilter(@ptrCast(*const c.FcFontSet, font_set).fonts[0], object_set);
+        const font = c.FcPatternFilter(
+            @ptrCast(*const c.FcFontSet, font_set).fonts[0],
+            object_set,
+        );
         defer c.FcPatternDestroy(font);
 
         var value: c.FcValue = undefined;

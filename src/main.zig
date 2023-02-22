@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const hui = @import("hui.zig");
 const dialog = @import("dialog.zig");
 
 pub const HoloMenuConfig = struct {
@@ -78,21 +79,29 @@ pub fn main() !void {
         try options.append(option);
     }
 
-    // TODO: this shouldn't be hardcoded actually
-    const option = (try dialog.open_dialog(allocator, options.items, .{
-        .height = 32,
+    const dialog_config = dialog.DialogConfig{
+        .height = 24,
         .font_path = "/home/nm/.local/share/fonts/Iosevka Nerd Font Complete Mono Windows Compatible.ttf",
-        .font_size = 14,
-        .bg = dialog.color(15, 15, 20, 255),
-        .fg = dialog.color(250, 230, 230, 255),
-        .searchbar_bg = dialog.color(30, 30, 20, 255),
-        .searchbar_fg = dialog.color(250, 230, 230, 255),
+        .font_size = 16,
+        .bg = hui.color(15, 15, 20, 255),
+        .fg = hui.color(250, 230, 230, 255),
+        .searchbar_bg = hui.color(15, 15, 20, 255),
+        .searchbar_fg = hui.color(250, 230, 230, 255),
         .searchbar_width = 300,
-        .active_fg = dialog.color(192, 100, 240, 255),
+        .active_bg = hui.color(160, 80, 220, 255),
+        .active_fg = hui.color(250, 240, 250, 255),
         .prompt_show = true,
-        .prompt_fg = dialog.color(192, 100, 240, 255),
-        .prompt_text = "holomenu  ==> ",
-    })) orelse {
+        .prompt_text = "holo =>  ",
+        .prompt_bg = hui.color(192, 100, 240, 255),
+        .prompt_fg = hui.color(250, 240, 250, 255),
+    };
+
+    // TODO: this shouldn't be hardcoded actually
+    const option = (try dialog.open_dialog(
+        allocator,
+        options.items,
+        dialog_config,
+    )) orelse {
         std.log.info("exiting without any option selected", .{});
         return;
     };

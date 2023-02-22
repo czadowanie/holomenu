@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const hui = @import("hui.zig");
+
 const c = @cImport({
     @cInclude("SDL2/SDL.h");
     @cInclude("SDL2/SDL_ttf.h");
@@ -7,90 +9,57 @@ const c = @cImport({
 
 const FontConfig = @import("fontconfig.zig").FontConfig;
 
-pub const Color = struct {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-
-    pub fn init(r: u8, g: u8, b: u8, a: u8) @This() {
-        return .{
-            .r = r,
-            .g = g,
-            .b = b,
-            .a = a,
-        };
-    }
-
-    fn to_sdl(self: *const @This()) c.SDL_Color {
-        return c.SDL_Color{
-            .r = self.r,
-            .g = self.g,
-            .b = self.b,
-            .a = self.a,
-        };
-    }
-};
-
-pub const Padding = struct {
-    t: i32,
-    r: i32,
-    b: i32,
-    l: i32,
-
-    pub fn init(t: i32, l: i32, b: i32, r: i32) @This() {
-        return .{
-            .t = t,
-            .r = r,
-            .b = b,
-            .l = l,
-        };
-    }
-
-    pub fn initVH(vertical: i32, horizontal: i32) @This() {
-        return .{
-            .t = vertical,
-            .b = vertical,
-            .r = horizontal,
-            .l = horizontal,
-        };
-    }
-};
-
-pub const LayoutBox = struct {
-    content_offset: [2]i32,
-    size: [2]i32,
-
-    pub fn init(content_size: [2]i32, padding: Padding) @This() {
-        return @This(){
-            .content_offset = [2]i32{
-                padding.r,
-                padding.t,
-            },
-            .size = [2]i32{
-                content_size[0] + padding.r + padding.l,
-                content_size[1] + padding.t + padding.b,
-            },
-        };
-    }
-};
-
-pub const color = Color.init;
-
 pub const DialogConfig = struct {
     height: i32,
     font_path: []const u8,
     font_size: i32,
-    bg: Color,
-    fg: Color,
-    searchbar_bg: Color,
-    searchbar_fg: Color,
+    bg: hui.Color,
+    fg: hui.Color,
+    searchbar_bg: hui.Color,
+    searchbar_fg: hui.Color,
     searchbar_width: i32,
-    active_fg: Color,
+    active_bg: hui.Color,
+    active_fg: hui.Color,
     prompt_show: bool,
     prompt_text: []const u8,
-    prompt_fg: Color,
+    prompt_bg: hui.Color,
+    prompt_fg: hui.Color,
 };
+
+fn drawRect(renderer: *c.SDL_Renderer, color: hui.Color, x: i32, y: i32, size: [2]i32) !void {
+    if (c.SDL_SetRenderDrawColor(
+        renderer,
+        color.r,
+        color.g,
+        color.b,
+        color.a,
+    ) != 0) {
+        std.log.err("failed to set render draw color: {s}", .{c.SDL_GetError()});
+        return DialogError.SDLError;
+    }
+
+    if (c.SDL_RenderFillRect(
+        renderer,
+        &c.SDL_Rect{
+            .x = x,
+            .y = y,
+            .w = size[0],
+            .h = size[1],
+        },
+    ) != 0) {
+        std.log.err("failed to render fill rect: {s}", .{c.SDL_GetError()});
+        return DialogError.SDLError;
+    }
+}
+
+fn color_to_sdl(self: hui.Color) c.SDL_Color {
+    return c.SDL_Color{
+        .r = self.r,
+        .g = self.g,
+        .b = self.b,
+        .a = self.a,
+    };
+}
 
 pub const DialogError = error{
     SDLError,
@@ -108,7 +77,7 @@ fn createText(
     allocator: std.mem.Allocator,
     renderer: *c.SDL_Renderer,
     font: *c.TTF_Font,
-    fg: Color,
+    fg: hui.Color,
     text: []const u8,
 ) !Text {
     var buf = try allocator.alloc(u8, text.len + 1);
@@ -120,7 +89,7 @@ fn createText(
     const surface = c.TTF_RenderText_Blended(
         font,
         buf.ptr,
-        fg.to_sdl(),
+        color_to_sdl(fg),
     ) orelse {
         std.log.err("failed to render a text surface: {s}", .{c.TTF_GetError()});
         return DialogError.SDLError;
@@ -235,17 +204,31 @@ pub fn open_dialog(
         0,
         display_dimensions[0],
         config.height,
-        c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_KEYBOARD_GRABBED,
+        c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_KEYBOARD_GRABBED | c.SDL_WINDOW_POPUP_MENU,
     ) orelse {
         std.log.err("failed to create a window: {s}", .{c.SDL_GetError()});
         return DialogError.SDLError;
     };
-    defer c.SDL_DestroyWindow(window);
+    defer {
+        c.SDL_DestroyWindow(window);
+
+        // idk, on my xmonad setup closing a window with `SDL_WINDOW_POPUP_MENU`
+        // causes the window manager to ignore keyboard input until a new window
+        // is shown.
+        const fixup_window = c.SDL_CreateWindow(
+            "holomenu",
+            0,
+            0,
+            display_dimensions[0],
+            config.height,
+            c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_KEYBOARD_GRABBED,
+        );
+        c.SDL_DestroyWindow(fixup_window);
+    }
 
     var w: c_int = undefined;
     var h: c_int = undefined;
     c.SDL_GetWindowSizeInPixels(window, &w, &h);
-    std.log.info("window: {}x{}", .{ w, h });
 
     var renderer = c.SDL_CreateRenderer(window, 0, c.SDL_RENDERER_ACCELERATED) orelse {
         std.log.err("failed to create a renderer: {s}", .{c.SDL_GetError()});
@@ -285,8 +268,7 @@ pub fn open_dialog(
     var active: usize = 0;
 
     const padding_v = @divFloor(config.height - options_cache.text[0].size[1], 2);
-    const padding = Padding.initVH(padding_v, 12);
-    std.log.info("padding: {}", .{padding});
+    const padding = hui.Padding.initVH(padding_v, 12);
 
     // LOOP
 
@@ -349,9 +331,11 @@ pub fn open_dialog(
                                     else
                                         sym;
                                     try textfield_content.append(char);
+                                    active = 0;
                                 } else {
                                     if (ev.key.keysym.sym == c.SDLK_SPACE) {
                                         try textfield_content.append(' ');
+                                        active = 0;
                                     }
                                 }
                             }
@@ -383,7 +367,7 @@ pub fn open_dialog(
 
             // PROMPT
             if (config.prompt_show) {
-                const prompt_padding = Padding.init(padding_v, 0, padding_v, 12);
+                const prompt_padding = hui.pad(padding_v, 0, padding_v, 12);
 
                 const text = try createText(
                     allocator,
@@ -394,16 +378,25 @@ pub fn open_dialog(
                 );
                 defer c.SDL_DestroyTexture(text.texture);
 
-                const box = LayoutBox.init(text.size, prompt_padding);
+                const box = hui.box(text.size, prompt_padding);
 
-                try renderText(renderer, text, row_layout_x + box.content_offset[0], box.content_offset[1]);
+                try drawRect(renderer, config.prompt_bg, row_layout_x, 0, box.size);
+
+                try renderText(
+                    renderer,
+                    text,
+                    row_layout_x + box.content_offset[0],
+                    box.content_offset[1],
+                );
 
                 row_layout_x += box.size[0];
             }
 
             // SEARCHBAR
             {
-                const box = LayoutBox.init(.{ config.searchbar_width, config.height }, padding);
+                const box = hui.box(.{ config.searchbar_width, config.height }, padding);
+
+                try drawRect(renderer, config.searchbar_bg, row_layout_x, 0, box.size);
 
                 if (textfield_content.items.len > 0) {
                     const text = try createText(
@@ -415,7 +408,12 @@ pub fn open_dialog(
                     );
                     defer c.SDL_DestroyTexture(text.texture);
 
-                    try renderText(renderer, text, row_layout_x + box.content_offset[0], box.content_offset[1]);
+                    try renderText(
+                        renderer,
+                        text,
+                        row_layout_x + box.content_offset[0],
+                        box.content_offset[1],
+                    );
                 }
 
                 row_layout_x += box.size[0];
@@ -440,15 +438,48 @@ pub fn open_dialog(
                         );
                         defer c.SDL_DestroyTexture(text.texture);
 
-                        const box = LayoutBox.init(text.size, padding);
-                        try renderText(renderer, text, row_layout_x + box.content_offset[0], box.content_offset[1]);
+                        const box = hui.box(text.size, padding);
+
+                        // {
+                        //     const bg_color = config.active_bg;
+                        //     _ = c.SDL_SetRenderDrawColor(
+                        //         renderer,
+                        //         bg_color.r,
+                        //         bg_color.g,
+                        //         bg_color.b,
+                        //         bg_color.a,
+                        //     );
+                        //     _ = c.SDL_RenderFillRect(
+                        //         renderer,
+                        //         &c.SDL_Rect{
+                        //             .x = row_layout_x,
+                        //             .y = 0,
+                        //             .w = box.size[0],
+                        //             .h = box.size[1],
+                        //         },
+                        //     );
+                        // }
+
+                        try drawRect(renderer, config.active_bg, row_layout_x, 0, box.size);
+
+                        try renderText(
+                            renderer,
+                            text,
+                            row_layout_x + box.content_offset[0],
+                            box.content_offset[1],
+                        );
 
                         break :blk box.size[0];
                     } else blk: {
                         const text = options_cache.text[i];
 
-                        const box = LayoutBox.init(text.size, padding);
-                        try renderText(renderer, text, row_layout_x + box.content_offset[0], box.content_offset[1]);
+                        const box = hui.box(text.size, padding);
+                        try renderText(
+                            renderer,
+                            text,
+                            row_layout_x + box.content_offset[0],
+                            box.content_offset[1],
+                        );
 
                         break :blk box.size[0];
                     };
