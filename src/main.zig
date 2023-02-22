@@ -3,8 +3,12 @@ const std = @import("std");
 const dialog = @import("dialog.zig");
 
 pub const HoloMenuConfig = struct {
-    height: ?i32,
-    font: ?[:0]const u8,
+    height: i32,
+    font: [:0]const u8,
+    bg: []const u8,
+    fg: []const u8,
+    bg_search: []const u8,
+    fg_search: []const u8,
 
     fn merge(self: *@This(), rhs: *const @This()) void {
         self.* = @This(){
@@ -65,43 +69,26 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    var config = HoloMenuConfig{
-        .height = 24,
-        .font = "monospace:size=12",
-    };
-
     const stdin = std.io.getStdIn().reader();
-    if (stdin.context.isTty()) {
-        // TODO: display a help message instead
-        std.log.err("don't run me from terminal silly!", .{});
-        return;
-    }
-
-    const home = std.os.getenv("HOME") orelse {
-        std.log.err("$HOME is not set", .{});
-        return;
-    };
-
-    const config_path = try std.mem.join(
-        allocator,
-        "/",
-        &[_][]const u8{ home, ".config/holomenu.json" },
-    );
-    try config.merge_from_file(allocator, config_path);
 
     var input = try stdin.readAllAlloc(allocator, 1025 * 1024);
-
     var options = std.ArrayList([]const u8).init(allocator);
     var iter = std.mem.tokenize(u8, input, "\n");
     while (iter.next()) |option| {
         try options.append(option);
     }
 
+    // TODO: this shouldn't be hardcoded actually
     const option = (try dialog.open_dialog(allocator, options.items, .{
-        // SAFETY: this should be fine since there's a default height that should always be set
-        .height = config.height.?,
-        // SAFETY: this should be fine since there's a default font that should always be set
-        .font = config.font.?,
+        .height = 24,
+        .font_path = "/home/nm/.local/share/fonts/Iosevka Nerd Font Complete Mono Windows Compatible.ttf",
+        .font_size = 14,
+        .bg = dialog.color(15, 15, 20, 255),
+        .fg = dialog.color(250, 230, 230, 255),
+        .searchbar_bg = dialog.color(30, 30, 20, 255),
+        .searchbar_fg = dialog.color(250, 230, 230, 255),
+        .searchbar_width = 300,
+        .active_fg = dialog.color(240, 40, 220, 255),
     })) orelse {
         std.log.info("exiting without any option selected", .{});
         return;

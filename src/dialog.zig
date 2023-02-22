@@ -7,9 +7,43 @@ const c = @cImport({
 
 const FontConfig = @import("fontconfig.zig").FontConfig;
 
+pub const Color = struct {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+
+    pub fn init(r: u8, g: u8, b: u8, a: u8) @This() {
+        return .{
+            .r = r,
+            .g = g,
+            .b = b,
+            .a = a,
+        };
+    }
+
+    fn to_sdl(self: *const @This()) c.SDL_Color {
+        return c.SDL_Color{
+            .r = self.r,
+            .g = self.g,
+            .b = self.b,
+            .a = self.a,
+        };
+    }
+};
+
+pub const color = Color.init;
+
 pub const DialogConfig = struct {
-    height: i32,
-    font: [:0]const u8,
+    height: u32,
+    font_path: []const u8,
+    font_size: u32,
+    bg: Color,
+    fg: Color,
+    searchbar_bg: Color,
+    searchbar_fg: Color,
+    searchbar_width: u32,
+    active_fg: Color,
 };
 
 pub const DialogError = error{
@@ -17,24 +51,60 @@ pub const DialogError = error{
 };
 
 fn matches(pattern: []const u8, str: []const u8) bool {
-    // if (pattern.len > str.len) {
-    //     return false;
-    // }
-
-    // var i: usize = 0;
-    // while (i < pattern.len) {
-    //     if (pattern[i] != str[i]) {
-    //         return false;
-    //     }
-    //     i += 1;
-    // }
-
-    // return true;
-
     if (std.mem.indexOf(u8, str, pattern)) |_| {
         return true;
     } else {
         return false;
+    }
+}
+
+fn createText(
+    allocator: std.mem.Allocator,
+    renderer: *c.SDL_Renderer,
+    font: *c.TTF_Font,
+    fg: Color,
+    text: []const u8,
+) !Text {
+    var buf = try allocator.alloc(u8, text.len + 1);
+    defer allocator.free(buf);
+
+    std.mem.copy(u8, buf, text);
+    buf[text.len] = 0;
+
+    const surface = c.TTF_RenderText_Blended(
+        font,
+        buf.ptr,
+        fg.to_sdl(),
+    ) orelse {
+        std.log.err("failed to render a text surface: {s}", .{c.TTF_GetError()});
+        return DialogError.SDLError;
+    };
+
+    defer c.SDL_FreeSurface(surface);
+    const texture = c.SDL_CreateTextureFromSurface(
+        renderer,
+        surface,
+    ) orelse return DialogError.SDLError;
+
+    return .{
+        .texture = texture,
+        .size = [2]i32{
+            @ptrCast(*c.SDL_Surface, surface).w,
+            @ptrCast(*c.SDL_Surface, surface).h,
+        },
+    };
+}
+
+fn renderText(renderer: *c.SDL_Renderer, text: Text, x: i32, y: i32) !void {
+    const dst = c.SDL_Rect{
+        .x = x,
+        .y = y,
+        .w = text.size[0],
+        .h = text.size[1],
+    };
+
+    if (c.SDL_RenderCopy(renderer, text.texture, null, &dst) != 0) {
+        std.log.err("failed to render copy: {s}", .{c.SDL_GetError()});
     }
 }
 
@@ -51,22 +121,20 @@ fn display_size() DialogError![2]i32 {
     };
 }
 
-const OptionsCache = struct {
-    const Text = struct {
-        texture: *c.SDL_Texture,
-        size: [2]i32,
-    };
+const Text = struct {
+    texture: *c.SDL_Texture,
+    size: [2]i32,
+};
 
-    text: []?Text,
-    lowercase: []?[]u8,
+const OptionsCache = struct {
+    text: []Text,
+    lowercase: [][]u8,
     allocator: std.mem.Allocator,
 
     fn init(allocator: std.mem.Allocator, options_len: usize) !@This() {
-        const text = try allocator.alloc(?Text, options_len);
-        std.mem.set(?Text, text, null);
+        const text = try allocator.alloc(Text, options_len);
 
-        const lowercase = try allocator.alloc(?[]u8, options_len);
-        std.mem.set(?[]u8, lowercase, null);
+        const lowercase = try allocator.alloc([]u8, options_len);
 
         return .{
             .text = text,
@@ -77,9 +145,7 @@ const OptionsCache = struct {
 
     fn deinit(self: @This()) void {
         for (self.text) |text| {
-            if (text) |cached| {
-                c.SDL_DestroyTexture(cached.texture);
-            }
+            c.SDL_DestroyTexture(text.texture);
         }
         self.allocator.free(self.text);
     }
@@ -92,6 +158,14 @@ pub fn open_dialog(
 ) !?[]const u8 {
     var options_cache = try OptionsCache.init(allocator, options.len);
     defer options_cache.deinit();
+
+    for (options) |option, i| {
+        var lowercase = try allocator.alloc(u8, option.len);
+        for (option) |char, char_index| {
+            lowercase[char_index] = std.ascii.toLower(char);
+        }
+        options_cache.lowercase[i] = lowercase;
+    }
 
     if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
         std.log.err("failed to init SDL: {s}", .{c.SDL_GetError()});
@@ -113,7 +187,7 @@ pub fn open_dialog(
         0,
         display_dimensions[0],
 
-        config.height,
+        @intCast(i32, config.height),
 
         c.SDL_WINDOW_SHOWN | c.SDL_WINDOW_KEYBOARD_GRABBED,
     ) orelse {
@@ -123,36 +197,48 @@ pub fn open_dialog(
 
     defer c.SDL_DestroyWindow(window);
 
-    const renderer = c.SDL_CreateRenderer(window, 0, c.SDL_RENDERER_ACCELERATED) orelse {
+    var renderer = c.SDL_CreateRenderer(window, 0, c.SDL_RENDERER_ACCELERATED) orelse {
         std.log.err("failed to create a renderer: {s}", .{c.SDL_GetError()});
         return DialogError.SDLError;
     };
 
-    _ = c.SDL_RenderSetVSync(renderer, 1);
+    if (c.SDL_RenderSetVSync(renderer, 1) != 0) {
+        std.log.err("failed to set vsync!", .{});
+    }
+    if (c.SDL_SetRenderDrawBlendMode(renderer, c.SDL_BLENDMODE_BLEND) != 0) {
+        std.log.err("failed to set blend mode!", .{});
+    }
 
     defer c.SDL_DestroyRenderer(renderer);
 
-    const fc = try FontConfig.parse_and_resolve(
-        allocator,
-
-        config.font.ptr,
-    );
-    defer fc.deinit();
-
-    std.log.info("font path: \"{s}\", font size: {}", .{ fc.filepath, fc.size });
-
-    const font = c.TTF_OpenFont(fc.filepath.ptr, fc.size) orelse {
+    const font = c.TTF_OpenFont(config.font_path.ptr, @intCast(c_int, config.font_size)) orelse {
         std.log.err("failed to open font: {s}", .{c.TTF_GetError()});
         return DialogError.SDLError;
     };
     defer c.TTF_CloseFont(font);
 
-    var running = true;
+    for (options) |option, i| {
+        const text = try createText(
+            allocator,
+            renderer,
+            font,
+            config.fg,
+            option,
+        );
+        options_cache.text[i] = text;
+    }
 
+    // PREP
+
+    var running = true;
     var textfield_content = std.ArrayList(u8).init(allocator);
+    var active: usize = 0;
+
+    // LOOP
 
     while (running) {
         var textfield_content_lowercase = try textfield_content.clone();
+        defer textfield_content_lowercase.deinit();
         for (textfield_content_lowercase.items) |_, i| {
             textfield_content_lowercase.items[i] = std.ascii.toLower(
                 textfield_content_lowercase.items[i],
@@ -160,6 +246,7 @@ pub fn open_dialog(
         }
 
         // events
+
         var ev: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&ev) != 0) {
             switch (ev.type) {
@@ -174,24 +261,29 @@ pub fn open_dialog(
                         c.SDLK_RETURN, c.SDLK_RETURN2 => {
                             running = false;
 
+                            var pos: usize = 0;
                             for (options) |option, i| {
-                                const lowercase = if (options_cache.lowercase[i]) |value| value else blk: {
-                                    var lowercase = try allocator.alloc(u8, option.len);
-                                    for (option) |char, char_index| {
-                                        lowercase[char_index] = std.ascii.toLower(char);
-                                    }
-                                    options_cache.lowercase[i] = lowercase;
-
-                                    break :blk lowercase;
-                                };
+                                const lowercase = options_cache.lowercase[i];
 
                                 if (matches(textfield_content.items, lowercase)) {
-                                    return option;
+                                    if (pos == active) {
+                                        return option;
+                                    } else {
+                                        pos += 1;
+                                    }
                                 }
                             }
                         },
                         c.SDLK_BACKSPACE => {
                             _ = textfield_content.popOrNull();
+                        },
+                        c.SDLK_RIGHT => {
+                            active += 1;
+                        },
+                        c.SDLK_LEFT => {
+                            if (active != 0) {
+                                active -= 1;
+                            }
                         },
                         else => {
                             const keyname = c.SDL_GetKeyName(ev.key.keysym.sym);
@@ -217,114 +309,73 @@ pub fn open_dialog(
         }
 
         // render
-        // TODO: refactor
+        {
+            // CLEAR
 
-        if (c.SDL_RenderClear(renderer) != 0) {
-            std.log.err("failed to clear!", .{});
-        }
-
-        const TEXTFIELD_WIDTH = 300;
-
-        const BG_COLOR = c.SDL_Color{
-            .r = 0,
-            .g = 0,
-            .b = 0,
-            .a = 255,
-        };
-
-        if (textfield_content.items.len > 0) {
-            const color = c.SDL_Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
-
-            var buf = try allocator.alloc(u8, textfield_content.items.len + 1);
-            defer allocator.free(buf);
-
-            std.mem.copy(u8, buf, textfield_content.items);
-            buf[textfield_content.items.len] = 0;
-
-            const surface = c.TTF_RenderText_Shaded(font, buf.ptr, color, BG_COLOR);
-            defer c.SDL_FreeSurface(surface);
-
-            const texture = c.SDL_CreateTextureFromSurface(renderer, surface);
-            defer c.SDL_DestroyTexture(texture);
-
-            const dst = c.SDL_Rect{
-                .x = 0,
-                .y = 2,
-                .w = @ptrCast(*c.SDL_Surface, surface).w,
-                .h = @ptrCast(*c.SDL_Surface, surface).h,
-            };
-
-            if (c.SDL_RenderCopy(renderer, texture, null, &dst) != 0) {
-                std.log.err("failed to render copy: {s}", .{c.SDL_GetError()});
+            if (c.SDL_SetRenderDrawColor(
+                renderer,
+                config.bg.r,
+                config.bg.g,
+                config.bg.b,
+                config.bg.a,
+            ) != 0) {
+                std.log.err("failed to set draw color!", .{});
             }
-        }
+            if (c.SDL_RenderClear(renderer) != 0) {
+                std.log.err("failed to clear!", .{});
+            }
 
-        const PADDING = 16;
-        var x: i32 = TEXTFIELD_WIDTH;
-        var i: usize = 0;
-        while (i < options.len and x < display_dimensions[0]) : (i += 1) {
-            const option = options[i];
+            // SEARCHBAR
 
-            const lowercase = if (options_cache.lowercase[i]) |value| value else blk: {
-                var lowercase = try allocator.alloc(u8, option.len);
-                for (option) |char, char_index| {
-                    lowercase[char_index] = std.ascii.toLower(char);
-                }
-                options_cache.lowercase[i] = lowercase;
+            if (textfield_content.items.len > 0) {
+                const text = try createText(
+                    allocator,
+                    renderer,
+                    font,
+                    config.searchbar_fg,
+                    textfield_content.items,
+                );
+                defer c.SDL_DestroyTexture(text.texture);
+                try renderText(renderer, text, 0, 2);
+            }
 
-                break :blk lowercase;
-            };
-            if (matches(textfield_content.items, lowercase)) {
-                if (options_cache.text[i]) |cached| {
-                    const dst = c.SDL_Rect{
-                        .x = x,
-                        .y = 2,
-                        .w = cached.size[0],
-                        .h = cached.size[1],
+            // OPTIONS
+
+            const PADDING = 16;
+            var x: i32 = @intCast(i32, config.searchbar_width);
+            var i: usize = 0;
+            var pos: usize = 0;
+
+            while (i < options.len and x < display_dimensions[0]) : (i += 1) {
+                const lowercase = options_cache.lowercase[i];
+
+                if (matches(textfield_content.items, lowercase)) {
+                    const increment = if (pos == active) blk: {
+                        const text = try createText(
+                            allocator,
+                            renderer,
+                            font,
+                            config.active_fg,
+                            options[i],
+                        );
+                        defer c.SDL_DestroyTexture(text.texture);
+                        try renderText(renderer, text, x, 2);
+                        break :blk text.size[0];
+                    } else blk: {
+                        const text = options_cache.text[i];
+                        try renderText(renderer, text, x, 2);
+                        break :blk text.size[0];
                     };
 
-                    x += dst.w + PADDING;
-
-                    if (c.SDL_RenderCopy(renderer, cached.texture, null, &dst) != 0) {
-                        std.log.err("failed to render copy: {s}", .{c.SDL_GetError()});
-                    }
-                } else {
-                    const color = c.SDL_Color{ .r = 255, .g = 128, .b = 192, .a = 255 };
-
-                    var buf = try allocator.alloc(u8, option.len + 1);
-                    defer allocator.free(buf);
-
-                    std.mem.copy(u8, buf, option);
-                    buf[option.len] = 0;
-
-                    const surface = c.TTF_RenderText_Shaded(
-                        font,
-                        buf.ptr,
-                        color,
-                        BG_COLOR,
-                    ) orelse {
-                        std.log.err("failed to render a text surface: {s}", .{c.TTF_GetError()});
-                        return DialogError.SDLError;
-                    };
-
-                    defer c.SDL_FreeSurface(surface);
-                    const texture = c.SDL_CreateTextureFromSurface(
-                        renderer,
-                        surface,
-                    ) orelse return DialogError.SDLError;
-
-                    options_cache.text[i] = .{
-                        .texture = texture,
-                        .size = [2]i32{
-                            @ptrCast(*c.SDL_Surface, surface).w,
-                            @ptrCast(*c.SDL_Surface, surface).h,
-                        },
-                    };
+                    x += increment + PADDING;
+                    pos += 1;
                 }
             }
-        }
 
-        c.SDL_RenderPresent(renderer);
+            // PRESENT
+
+            c.SDL_RenderPresent(renderer);
+        }
     }
 
     return null;
