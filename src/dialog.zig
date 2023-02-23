@@ -19,7 +19,7 @@ pub const DialogConfig = struct {
     searchbar_fg: hui.Color,
     searchbar_width: i32,
     active_bg: hui.Color,
-    active_fg: hui.Color,
+    active_fg: hui.Color, // TODO: handle the thing?
     prompt_show: bool,
     prompt_text: []const u8,
     prompt_bg: hui.Color,
@@ -543,10 +543,18 @@ pub fn open_dialog(
                 }
 
                 if (i == active) {
+                    const text_active = try createText(
+                        allocator,
+                        renderer,
+                        font,
+                        config.active_fg,
+                        options[filtered.items[i]],
+                    );
+
                     try drawRect(renderer, config.active_bg, row_layout_x, 0, box.size);
                     try renderText(
                         renderer,
-                        text,
+                        text_active,
                         row_layout_x + box.content_offset[0],
                         box.content_offset[1],
                     );

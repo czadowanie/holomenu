@@ -10,7 +10,14 @@ pub const FontConfig = struct {
     allocator: std.mem.Allocator,
 
     /// cleanup with `deinit`
-    pub fn parse_and_resolve(allocator: std.mem.Allocator, fc_pattern: [*c]const u8) !@This() {
+    pub fn parse_and_resolve(allocator: std.mem.Allocator, fontconfig_pattern: []const u8) !@This() {
+        // var fc_pattern: [:0]const u8 =  try allocator.alloc(ou8, );
+        // defer allocator.free(fc_pattern);
+
+        const fc_pattern_storage = try std.mem.concatWithSentinel(allocator, u8, &[_][]const u8{fontconfig_pattern}, 0);
+        defer allocator.free(fc_pattern_storage);
+        const fc_pattern = fc_pattern_storage.ptr;
+
         const conf = c.FcInitLoadConfigAndFonts().?;
 
         const pattern = c.FcNameParse(fc_pattern).?;

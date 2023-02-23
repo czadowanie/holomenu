@@ -1,67 +1,65 @@
 const std = @import("std");
 
 const hui = @import("hui.zig");
+const fc = @import("fontconfig.zig");
 const dialog = @import("dialog.zig");
+const ini = @import("ini.zig");
 
-pub const HoloMenuConfig = struct {
-    height: i32,
-    font: [:0]const u8,
-    bg: []const u8,
-    fg: []const u8,
-    bg_search: []const u8,
-    fg_search: []const u8,
+const HoloMenuConfig = struct {
+    const default_primary = hui.color(20, 20, 20, 255);
+    const default_secondary = hui.color(250, 250, 250, 255);
+    const default_accent = hui.color(250, 80, 250, 255);
 
-    fn merge(self: *@This(), rhs: *const @This()) void {
-        self.* = @This(){
-            .height = if (rhs.height) |value| value else self.height,
-            .font = if (rhs.font) |value| value else self.font,
-        };
-    }
+    window: struct {
+        height: i32,
+        font: []const u8,
+        bg: hui.Color,
+        fg: hui.Color,
+    } = .{ .height = 24, .font = "monospace:size=16", .bg = default_primary, .fg = default_secondary },
 
-    fn merge_from_file(self: *@This(), allocator: std.mem.Allocator, path: []const u8) !void {
-        const file = try std.fs.openFileAbsolute(path, .{});
-        defer file.close();
+    searchbar: struct {
+        width: i32,
+        bg: hui.Color,
+        fg: hui.Color,
+    } = .{ .width = 200, .bg = default_primary, .fg = default_secondary },
 
-        // 16kb should be more than enough
-        const contents = try file.readToEndAlloc(allocator, 1024 * 16);
+    active: struct {
+        bg: hui.Color,
+        fg: hui.Color,
+    } = .{ .bg = default_secondary, .fg = default_primary },
 
-        defer allocator.free(contents);
+    prompt: struct {
+        show: bool,
+        text: []const u8,
+        bg: hui.Color,
+        fg: hui.Color,
+    } = .{ .show = true, .text = "holo ", .bg = default_accent, .fg = default_secondary },
 
-        var parser = std.json.Parser.init(allocator, false);
-        defer parser.deinit();
+    pub fn merge(holo: *HoloMenuConfig, conf: ini.Ini) void {
+        inline for (@typeInfo(HoloMenuConfig).Struct.fields) |section_field| {
+            const t = @typeInfo(section_field.field_type);
+            if (t != .Struct) {
+                @compileError("every field in HoloMenuConfig should be a struct of values convertible from ini.Value");
+            }
+            inline for (t.Struct.fields) |key_field| {
+                if (conf.get(section_field.name, key_field.name)) |value| {
+                    const cast = switch (@typeInfo(key_field.field_type)) {
+                        @typeInfo(i32) => ini.Value.asInt,
+                        @typeInfo(bool) => ini.Value.asBool,
+                        @typeInfo([]const u8) => ini.Value.asStr,
+                        @typeInfo(hui.Color) => ini.Value.asColor,
+                        else => @compileError("no cast found for " ++ @typeName(key_field.field_type)),
+                    };
 
-        var tree = try parser.parse(contents);
-        defer tree.deinit();
-
-        switch (tree.root) {
-            .Object => |obj| {
-                const rhs = @This(){
-                    .height = if (obj.getEntry("height")) |entry| switch (entry.value_ptr.*) {
-                        std.json.Value.Integer => |value| @intCast(i32, value),
-                        else => blk: {
-                            std.log.err("{s}: \"height\" should be an integer", .{path});
-                            break :blk null;
-                        },
-                    } else null,
-                    .font = if (obj.getEntry("font")) |entry| switch (entry.value_ptr.*) {
-                        .String => |value| blk: {
-                            var string = @ptrCast([:0]u8, try allocator.alloc(u8, value.len + 1));
-                            std.mem.copy(u8, string, value);
-                            string[value.len] = 0;
-                            break :blk string;
-                        },
-                        else => blk: {
-                            std.log.err("{s}: \"font\" should be a string", .{path});
-                            break :blk null;
-                        },
-                    } else null,
-                };
-
-                self.merge(&rhs);
-            },
-            else => {
-                std.log.err("expected object at top level of config", .{});
-            },
+                    @field(
+                        @field(holo, section_field.name),
+                        key_field.name,
+                    ) = cast(value) orelse @field(
+                        @field(holo, section_field.name),
+                        key_field.name,
+                    );
+                }
+            }
         }
     }
 };
@@ -79,22 +77,40 @@ pub fn main() !void {
         try options.append(option);
     }
 
-    // TODO: this shouldn't be hardcoded actually
+    var config = HoloMenuConfig{};
+
+    const cfg_file = try std.fs.openFileAbsolute("/home/nm/.config/holomenu.ini", .{});
+    defer cfg_file.close();
+
+    const cfg_file_content = try cfg_file.readToEndAlloc(allocator, 1024 * 1024);
+    defer allocator.free(cfg_file_content);
+
+    var cfg = try ini.Ini.parse(allocator, cfg_file_content);
+    defer cfg.deinit();
+
+    config.merge(cfg);
+
+    const font = try fc.FontConfig.parse_and_resolve(
+        allocator,
+        config.window.font,
+    );
+    defer font.deinit();
+
     const dialog_config = dialog.DialogConfig{
-        .height = 24,
-        .font_path = "/home/nm/.local/share/fonts/Iosevka Nerd Font Complete Mono Windows Compatible.ttf",
-        .font_size = 16,
-        .bg = hui.color(15, 15, 20, 255),
-        .fg = hui.color(250, 230, 230, 255),
-        .searchbar_bg = hui.color(15, 15, 20, 255),
-        .searchbar_fg = hui.color(250, 230, 230, 255),
-        .searchbar_width = 300,
-        .active_bg = hui.color(160, 80, 220, 255),
-        .active_fg = hui.color(250, 240, 250, 255),
-        .prompt_show = true,
-        .prompt_text = "holo =>  ",
-        .prompt_bg = hui.color(192, 100, 240, 255),
-        .prompt_fg = hui.color(250, 240, 250, 255),
+        .height = config.window.height,
+        .font_path = font.filepath,
+        .font_size = font.size,
+        .bg = config.window.bg,
+        .fg = config.window.fg,
+        .searchbar_bg = config.searchbar.bg,
+        .searchbar_fg = config.searchbar.fg,
+        .searchbar_width = config.searchbar.width,
+        .active_bg = config.active.bg,
+        .active_fg = config.active.fg,
+        .prompt_show = config.prompt.show,
+        .prompt_text = config.prompt.text,
+        .prompt_bg = config.prompt.bg,
+        .prompt_fg = config.prompt.fg,
     };
 
     const option = (try dialog.open_dialog(
