@@ -334,6 +334,7 @@ pub fn open_dialog(
                         },
                         c.SDLK_BACKSPACE => {
                             _ = textfield_content.popOrNull();
+                            cursor_timer = 0;
                         },
                         c.SDLK_RIGHT => {
                             active = next_active(filtered.items.len, active);
@@ -363,10 +364,12 @@ pub fn open_dialog(
                                             sym;
                                         try textfield_content.append(char);
                                         active = 0;
+                                        cursor_timer = 0;
                                     } else {
                                         if (ev.key.keysym.sym == c.SDLK_SPACE) {
                                             try textfield_content.append(' ');
                                             active = 0;
+                                            cursor_timer = 0;
                                         }
                                     }
                                 }
