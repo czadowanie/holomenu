@@ -35,6 +35,19 @@ const HoloMenuConfig = struct {
         fg: hui.Color,
     } = .{ .show = true, .text = "holo ", .bg = default_accent, .fg = default_secondary },
 
+    cursor: struct {
+        show: bool,
+        interval: i32,
+    } = .{ .show = true, .interval = 500 },
+
+    arrows: struct {
+        show: bool,
+        bg: hui.Color,
+        fg: hui.Color,
+        text_right: []const u8,
+        text_left: []const u8,
+    } = .{ .show = true, .bg = default_accent, .fg = default_secondary, .text_left = "<", .text_right = ">" },
+
     pub fn merge(holo: *HoloMenuConfig, conf: ini.Ini) void {
         inline for (@typeInfo(HoloMenuConfig).Struct.fields) |section_field| {
             const t = @typeInfo(section_field.field_type);
@@ -112,6 +125,13 @@ pub fn main() !void {
         .prompt_text = config.prompt.text,
         .prompt_bg = config.prompt.bg,
         .prompt_fg = config.prompt.fg,
+        .cursor_show = config.cursor.show,
+        .cursor_interval = config.cursor.interval,
+        .arrows_show = config.arrows.show,
+        .arrows_text_left = config.arrows.text_left,
+        .arrows_text_right = config.arrows.text_right,
+        .arrows_bg = config.arrows.bg,
+        .arrows_fg = config.arrows.fg,
     };
 
     const option = (try dialog.open_dialog(

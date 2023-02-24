@@ -15,15 +15,27 @@ pub const DialogConfig = struct {
     font_size: i32,
     bg: hui.Color,
     fg: hui.Color,
+
     searchbar_bg: hui.Color,
     searchbar_fg: hui.Color,
     searchbar_width: i32,
+
     active_bg: hui.Color,
     active_fg: hui.Color,
+
     prompt_show: bool,
     prompt_text: []const u8,
     prompt_bg: hui.Color,
     prompt_fg: hui.Color,
+
+    cursor_show: bool,
+    cursor_interval: i32,
+
+    arrows_show: bool,
+    arrows_text_left: []const u8,
+    arrows_text_right: []const u8,
+    arrows_bg: hui.Color,
+    arrows_fg: hui.Color,
 };
 
 fn next_active(filtered_len: usize, current: usize) usize {
@@ -277,20 +289,54 @@ pub fn open_dialog(
         options_cache.text[i] = text;
     }
 
+    // padding
+
+    const padding_v = @divFloor(config.height - options_cache.text[0].size[1], 2);
+    const padding = hui.Padding.initVH(padding_v, 12);
+
+    // prerender prompt_text
+
+    const prompt_text = try createText(
+        allocator,
+        renderer,
+        font,
+        config.prompt_fg,
+        config.prompt_text,
+    );
+    defer c.SDL_DestroyTexture(prompt_text.texture);
+
+    // prerender arrows
+
+    const left_arrow_text = try createText(
+        allocator,
+        renderer,
+        font,
+        config.arrows_fg,
+        config.arrows_text_left,
+    );
+    defer c.SDL_DestroyTexture(left_arrow_text.texture);
+    const left_arrow_box = hui.box(left_arrow_text.size, padding);
+
+    const right_arrow_text = try createText(
+        allocator,
+        renderer,
+        font,
+        config.arrows_fg,
+        config.arrows_text_right,
+    );
+    defer c.SDL_DestroyTexture(right_arrow_text.texture);
+    const right_arrow_box = hui.box(right_arrow_text.size, padding);
+
     // PREP
 
     var running = true;
     var textfield_content = std.ArrayList(u8).init(allocator);
     var active: usize = 0;
-
-    const padding_v = @divFloor(config.height - options_cache.text[0].size[1], 2);
-    const padding = hui.Padding.initVH(padding_v, 12);
-
     var delta_timer = try std.time.Timer.start();
 
     // TODO: this should be configurable
     var cursor_timer: f32 = 0;
-    const CURSOR_INTERVAL: f32 = 400.0;
+    const cursor_interval = @intToFloat(f32, config.cursor_interval);
 
     // LOOP
 
@@ -403,23 +449,13 @@ pub fn open_dialog(
             // PROMPT
             if (config.prompt_show) {
                 const prompt_padding = hui.pad(padding_v, 0, padding_v, 12);
-
-                const text = try createText(
-                    allocator,
-                    renderer,
-                    font,
-                    config.prompt_fg,
-                    config.prompt_text,
-                );
-                defer c.SDL_DestroyTexture(text.texture);
-
-                const box = hui.box(text.size, prompt_padding);
+                const box = hui.box(prompt_text.size, prompt_padding);
 
                 try drawRect(renderer, config.prompt_bg, row_layout_x, 0, box.size);
 
                 try renderText(
                     renderer,
-                    text,
+                    prompt_text,
                     row_layout_x + box.content_offset[0],
                     box.content_offset[1],
                 );
@@ -455,46 +491,26 @@ pub fn open_dialog(
                     cursor_offset = text.size[0];
                 }
 
-                cursor_timer += dt;
-                if (cursor_timer < CURSOR_INTERVAL) {
-                    try drawRect(
-                        renderer,
-                        config.searchbar_fg,
-                        row_layout_x + box.content_offset[0] + cursor_offset + 2,
-                        box.content_offset[1] + 2,
-                        .{ 2, config.font_size },
-                    );
-                }
-                if (cursor_timer > CURSOR_INTERVAL * 2.0) {
-                    cursor_timer -= CURSOR_INTERVAL * 2.0;
+                if (config.cursor_show) {
+                    cursor_timer += dt;
+                    if (cursor_timer < cursor_interval) {
+                        try drawRect(
+                            renderer,
+                            config.searchbar_fg,
+                            row_layout_x + box.content_offset[0] + cursor_offset + 2,
+                            box.content_offset[1] + 2,
+                            .{ 2, config.font_size },
+                        );
+                    }
+                    if (cursor_timer > cursor_interval * 2.0) {
+                        cursor_timer -= cursor_interval * 2.0;
+                    }
                 }
 
                 row_layout_x += box.size[0];
             }
 
             // OPTIONS
-
-            // TODO: arrows should be configurable
-
-            const left_arrow_text = try createText(
-                allocator,
-                renderer,
-                font,
-                config.prompt_fg,
-                "<",
-            );
-            defer c.SDL_DestroyTexture(left_arrow_text.texture);
-            const left_arrow_box = hui.box(left_arrow_text.size, padding);
-
-            const right_arrow_text = try createText(
-                allocator,
-                renderer,
-                font,
-                config.prompt_fg,
-                ">",
-            );
-            defer c.SDL_DestroyTexture(right_arrow_text.texture);
-            const right_arrow_box = hui.box(right_arrow_text.size, padding);
 
             var start: usize = 0;
             if (filtered.items.len > 0) {
@@ -505,7 +521,12 @@ pub fn open_dialog(
                         const option_index = filtered.items[i];
                         const text = options_cache.text[option_index];
                         const box = hui.box(text.size, padding);
-                        const visible = x + box.size[0] < (display_dimensions[0] - left_arrow_box.size[0] - right_arrow_box.size[0]);
+
+                        const visible = x + box.size[0] < (display_dimensions[0] - if (config.arrows_show)
+                            (left_arrow_box.size[0] + right_arrow_box.size[0])
+                        else
+                            0);
+
                         if (!visible) {
                             break :inner;
                         }
@@ -519,8 +540,8 @@ pub fn open_dialog(
                 }
             }
 
-            if (start > 0) {
-                try drawRect(renderer, config.prompt_bg, row_layout_x, 0, left_arrow_box.size);
+            if (config.arrows_show and start > 0) {
+                try drawRect(renderer, config.arrows_bg, row_layout_x, 0, left_arrow_box.size);
                 try renderText(
                     renderer,
                     left_arrow_text,
@@ -576,10 +597,10 @@ pub fn open_dialog(
                 row_layout_x += box.size[0];
             }
 
-            if (show_right_arrow) {
+            if (config.arrows_show and show_right_arrow) {
                 const arrow_box_x = display_dimensions[0] - right_arrow_box.size[0];
 
-                try drawRect(renderer, config.prompt_bg, arrow_box_x, 0, right_arrow_box.size);
+                try drawRect(renderer, config.arrows_bg, arrow_box_x, 0, right_arrow_box.size);
                 try renderText(
                     renderer,
                     right_arrow_text,
