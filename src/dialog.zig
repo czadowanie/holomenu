@@ -19,7 +19,7 @@ pub const DialogConfig = struct {
     searchbar_fg: hui.Color,
     searchbar_width: i32,
     active_bg: hui.Color,
-    active_fg: hui.Color, // TODO: handle the thing?
+    active_fg: hui.Color, 
     prompt_show: bool,
     prompt_text: []const u8,
     prompt_bg: hui.Color,

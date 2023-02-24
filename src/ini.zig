@@ -81,15 +81,48 @@ fn parseHeader(token: []const u8) ?[]const u8 {
 }
 
 fn parseColor(rgba: []const u8) ParserError!hui.Color {
-    // TODO: other rgba formats
-    if (rgba.len == 8) {
-        const r: u8 = try std.fmt.parseInt(u8, rgba[0..2], 16);
-        const g: u8 = try std.fmt.parseInt(u8, rgba[2..4], 16);
-        const b: u8 = try std.fmt.parseInt(u8, rgba[4..6], 16);
-        const a: u8 = try std.fmt.parseInt(u8, rgba[6..8], 16);
-        return hui.color(r, g, b, a);
-    } else {
-        return ParserError.UnsupportedRGBAFormat;
+    switch (rgba.len) {
+        8 => {
+            const r: u8 = try std.fmt.parseInt(u8, rgba[0..2], 16);
+            const g: u8 = try std.fmt.parseInt(u8, rgba[2..4], 16);
+            const b: u8 = try std.fmt.parseInt(u8, rgba[4..6], 16);
+            const a: u8 = try std.fmt.parseInt(u8, rgba[6..8], 16);
+            return hui.color(r, g, b, a);
+        },
+        4 => {
+            const r_component: u8 = try std.fmt.parseInt(u8, rgba[0..1], 16);
+            const r = r_component + (r_component * 16);
+
+            const g_component: u8 = try std.fmt.parseInt(u8, rgba[1..2], 16);
+            const g = g_component + (g_component * 16);
+
+            const b_component: u8 = try std.fmt.parseInt(u8, rgba[2..3], 16);
+            const b = b_component + (b_component * 16);
+
+            const a_component: u8 = try std.fmt.parseInt(u8, rgba[3..4], 16);
+            const a = a_component + (a_component * 16);
+
+            return hui.color(r, g, b, a);
+        },
+        6 => {
+            const r: u8 = try std.fmt.parseInt(u8, rgba[0..2], 16);
+            const g: u8 = try std.fmt.parseInt(u8, rgba[2..4], 16);
+            const b: u8 = try std.fmt.parseInt(u8, rgba[4..6], 16);
+            return hui.color(r, g, b, 255);
+        },
+        3 => {
+            const r_component: u8 = try std.fmt.parseInt(u8, rgba[0..1], 16);
+            const r = r_component + (r_component * 16);
+
+            const g_component: u8 = try std.fmt.parseInt(u8, rgba[1..2], 16);
+            const g = g_component + (g_component * 16);
+
+            const b_component: u8 = try std.fmt.parseInt(u8, rgba[2..3], 16);
+            const b = b_component + (b_component * 16);
+
+            return hui.color(r, g, b, 255);
+        },
+        else => return ParserError.UnsupportedRGBAFormat,
     }
 }
 
@@ -141,16 +174,78 @@ pub const ParserError = error{
     OutOfMemory,
 };
 
+const Lexer = struct {
+    source: []const u8,
+    pos: usize,
+
+    pub fn init(source: []const u8) @This() {
+        return @This(){
+            .source = source,
+            .pos = 0,
+        };
+    }
+
+    pub fn next(self: *@This()) ?[]const u8 {
+        while (self.pos < self.source.len) {
+            switch (self.source[self.pos]) {
+                // handle comment
+                ';' => {
+                    if (std.mem.indexOfScalar(u8, self.source[self.pos..], '\n')) |offset| {
+                        self.pos += offset + 1;
+                    } else {
+                        return null;
+                    }
+                },
+                // skip whitespace
+                '\t', '\n', ' ' => self.pos += 1,
+                // tokenize string
+                // TODO: handle \"
+                '"' => {
+                    if (std.mem.indexOfScalar(u8, self.source[self.pos + 1 ..], '"')) |offset| {
+                        const start = self.pos;
+                        self.pos += offset + 1 + 1;
+                        return self.source[start..self.pos];
+                    } else {
+                        return null;
+                    }
+                },
+                // '=' is special
+                '=' => {
+                    self.pos += 1;
+                    return self.source[self.pos - 1 .. self.pos];
+                },
+                // like everything else
+                else => {
+                    const start = self.pos;
+                    const end = while (self.pos < self.source.len) {
+                        switch (self.source[self.pos]) {
+                            '\t', '\n', ' ' => break self.pos,
+                            else => {
+                                self.pos += 1;
+                            },
+                        }
+                    } else {
+                        break self.source.len;
+                    };
+
+                    self.pos += 1;
+
+                    return self.source[start..end];
+                },
+            }
+        }
+
+        return null;
+    }
+};
+
 pub const Ini = struct {
     map: std.StringHashMap(std.StringHashMap(Value)),
 
     pub fn parse(allocator: std.mem.Allocator, source: []const u8) ParserError!Ini {
-        // TODO: handle comments
-        // TODO: proper tokenizer
-
         var sections = std.StringHashMap(std.StringHashMap(Value)).init(allocator);
 
-        var tokens = std.mem.tokenize(u8, source, "\n\t ");
+        var tokens = Lexer.init(source);
 
         var current_section: ?[]const u8 = null;
         while (tokens.next()) |token| {

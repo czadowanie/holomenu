@@ -79,6 +79,7 @@ pub fn main() !void {
 
     var config = HoloMenuConfig{};
 
+    // TODO: ukhm... ..
     const cfg_file = try std.fs.openFileAbsolute("/home/nm/.config/holomenu.ini", .{});
     defer cfg_file.close();
 
