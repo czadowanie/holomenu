@@ -33,7 +33,7 @@ const HoloMenuConfig = struct {
         text: []const u8,
         bg: hui.Color,
         fg: hui.Color,
-    } = .{ .show = true, .text = "holo ", .bg = default_accent, .fg = default_secondary },
+    } = .{ .show = true, .text = "holo  ", .bg = default_accent, .fg = default_secondary },
 
     cursor: struct {
         show: bool,
@@ -77,6 +77,45 @@ const HoloMenuConfig = struct {
     }
 };
 
+fn resolve_path(allocator: std.mem.Allocator, path: []const u8) !?[]const u8 {
+    var output = std.ArrayList(u8).init(allocator);
+    defer output.deinit();
+
+    var pos: usize = 0;
+    while (pos < path.len) {
+        switch (path[pos]) {
+            '$' => {
+                pos += 2;
+
+                const start = pos;
+
+                if (std.mem.indexOfScalar(u8, path[pos..], ')')) |closing_pos| {
+                    pos += closing_pos;
+                } else {
+                    return null;
+                }
+
+                pos += 1;
+
+                const end = pos;
+
+                std.log.err("{s}", .{path[start .. end - 1]});
+                try output.appendSlice(std.os.getenv(path[start .. end - 1]) orelse return null);
+            },
+            '~' => {
+                try output.appendSlice(std.os.getenv("HOME") orelse return null);
+                pos += 1;
+            },
+            else => {
+                try output.append(path[pos]);
+                pos += 1;
+            },
+        }
+    }
+
+    return output.toOwnedSlice();
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -92,8 +131,10 @@ pub fn main() !void {
 
     var config = HoloMenuConfig{};
 
-    // TODO: ukhm... ..
-    const cfg_file = try std.fs.openFileAbsolute("/home/nm/.config/holomenu.ini", .{});
+    const config_path = (try resolve_path(allocator, "~/.config/holomenu.ini")).?;
+    defer allocator.free(config_path);
+
+    const cfg_file = try std.fs.openFileAbsolute(config_path, .{});
     defer cfg_file.close();
 
     const cfg_file_content = try cfg_file.readToEndAlloc(allocator, 1024 * 1024);
