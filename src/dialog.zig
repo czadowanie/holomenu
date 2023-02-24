@@ -19,7 +19,7 @@ pub const DialogConfig = struct {
     searchbar_fg: hui.Color,
     searchbar_width: i32,
     active_bg: hui.Color,
-    active_fg: hui.Color, 
+    active_fg: hui.Color,
     prompt_show: bool,
     prompt_text: []const u8,
     prompt_bg: hui.Color,
@@ -532,6 +532,10 @@ pub fn open_dialog(
 
             var i: usize = start;
             while (i < filtered.items.len) : (i += 1) {
+                if (show_right_arrow) {
+                    break;
+                }
+
                 const option_index = filtered.items[i];
                 const text = options_cache.text[option_index];
                 const box = hui.box(text.size, padding);
@@ -539,7 +543,6 @@ pub fn open_dialog(
                 const visible = row_layout_x + box.size[0] < display_dimensions[0];
                 if (!visible) {
                     show_right_arrow = true;
-                    break;
                 }
 
                 if (i == active) {
