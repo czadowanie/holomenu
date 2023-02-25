@@ -204,9 +204,9 @@ pub fn open_dialog(
     var options_cache = try OptionsCache.init(allocator, options.len);
     defer options_cache.deinit();
 
-    for (options) |option, i| {
+    for (options, 0..) |option, i| {
         var lowercase = try allocator.alloc(u8, option.len);
-        for (option) |char, char_index| {
+        for (option, 0..) |char, char_index| {
             lowercase[char_index] = std.ascii.toLower(char);
         }
         options_cache.lowercase[i] = lowercase;
@@ -278,7 +278,7 @@ pub fn open_dialog(
     };
     defer c.TTF_CloseFont(font);
 
-    for (options) |option, i| {
+    for (options, 0..) |option, i| {
         const text = try createText(
             allocator,
             renderer,
@@ -347,7 +347,7 @@ pub fn open_dialog(
 
         var textfield_content_lowercase = try textfield_content.clone();
         defer textfield_content_lowercase.deinit();
-        for (textfield_content_lowercase.items) |_, i| {
+        for (textfield_content_lowercase.items, 0..) |_, i| {
             textfield_content_lowercase.items[i] = std.ascii.toLower(
                 textfield_content_lowercase.items[i],
             );
@@ -356,7 +356,7 @@ pub fn open_dialog(
         // filter
         var filtered = std.ArrayList(usize).init(allocator);
         defer filtered.deinit();
-        for (options) |_, i| {
+        for (options, 0..) |_, i| {
             const lowercase = options_cache.lowercase[i];
             if (matches(textfield_content.items, lowercase)) {
                 try filtered.append(i);

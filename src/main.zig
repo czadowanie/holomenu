@@ -50,18 +50,18 @@ const HoloMenuConfig = struct {
 
     pub fn merge(holo: *HoloMenuConfig, conf: ini.Ini) void {
         inline for (@typeInfo(HoloMenuConfig).Struct.fields) |section_field| {
-            const t = @typeInfo(section_field.field_type);
+            const t = @typeInfo(section_field.type);
             if (t != .Struct) {
                 @compileError("every field in HoloMenuConfig should be a struct of values convertible from ini.Value");
             }
             inline for (t.Struct.fields) |key_field| {
                 if (conf.get(section_field.name, key_field.name)) |value| {
-                    const cast = switch (@typeInfo(key_field.field_type)) {
+                    const cast = switch (@typeInfo(key_field.type)) {
                         @typeInfo(i32) => ini.Value.asInt,
                         @typeInfo(bool) => ini.Value.asBool,
                         @typeInfo([]const u8) => ini.Value.asStr,
                         @typeInfo(hui.Color) => ini.Value.asColor,
-                        else => @compileError("no cast found for " ++ @typeName(key_field.field_type)),
+                        else => @compileError("no cast found for " ++ @typeName(key_field.type)),
                     };
 
                     @field(
@@ -113,7 +113,7 @@ fn resolve_path(allocator: std.mem.Allocator, path: []const u8) !?[]const u8 {
         }
     }
 
-    return output.toOwnedSlice();
+    return try output.toOwnedSlice();
 }
 
 pub fn main() !void {
