@@ -177,7 +177,7 @@ pub fn main() !void {
                 break :blk dialog.CursorShape.Underline;
             }
 
-            std.log.warn("unrecognized cursor shape: '{s}', defaulting to 'bar'", .{config.cursor.shape});
+            std.log.err("unrecognized cursor shape: '{s}', defaulting to \"bar\"", .{config.cursor.shape});
             break :blk dialog.CursorShape.Bar;
         },
         .cursor_show = config.cursor.show,
