@@ -65,19 +65,14 @@ pub const Value = union(ValueType) {
     }
 };
 
-fn parseHeader(token: []const u8) ?[]const u8 {
-    // smallest possible header is '[x]'
-    if (token.len < 4) {
-        // TODO: error on '[]'
-        return null;
-    }
-
-    if (token[0] != '[' and token[token.len - 1] != ']') {
-        // TODO: error on unclosed brackets
-        return null;
-    }
-
-    return token[1 .. token.len - 1];
+fn parseHeader(token: []const u8) ParserError!?[]const u8 {
+    if (token.len > 0 and token[0] == '[') {
+        if (token.len == 2 and token[1] == ']') {
+            return ParserError.EmptySectionHeader;
+        } else if (token[token.len - 1] != ']') {
+            return ParserError.ExpectedClosingSquareBracket;
+        } else return token[1 .. token.len - 1];
+    } else return null;
 }
 
 fn parseColor(rgba: []const u8) ParserError!hui.Color {
@@ -166,9 +161,10 @@ pub const ParserError = error{
     ExpectedToken,
     FailedToParseLine,
     ExpectedEqualSign,
+    ExpectedClosingSquareBracket,
+    EmptySectionHeader,
     UnclosedString,
     UnsupportedRGBAFormat,
-
     InvalidCharacter,
     Overflow,
     OutOfMemory,
@@ -185,7 +181,7 @@ const Lexer = struct {
         };
     }
 
-    pub fn next(self: *@This()) ?[]const u8 {
+    pub fn next(self: *@This()) ParserError!?[]const u8 {
         while (self.pos < self.source.len) {
             switch (self.source[self.pos]) {
                 // handle comment
@@ -199,14 +195,19 @@ const Lexer = struct {
                 // skip whitespace
                 '\t', '\n', ' ' => self.pos += 1,
                 // tokenize string
-                // TODO: handle \"
                 '"' => {
-                    if (std.mem.indexOfScalar(u8, self.source[self.pos + 1 ..], '"')) |offset| {
-                        const start = self.pos;
-                        self.pos += offset + 1 + 1;
-                        return self.source[start..self.pos];
-                    } else {
-                        return null;
+                    const start = self.pos;
+                    self.pos += 1;
+
+                    while (true) : (self.pos += 1) {
+                        if (self.pos >= self.source.len) {
+                            return ParserError.UnclosedString;
+                        }
+
+                        if (self.source[self.pos] == '"' and self.source[self.pos - 1] != '\\') {
+                            self.pos += 1;
+                            return self.source[start..self.pos];
+                        }
                     }
                 },
                 // '=' is special
@@ -248,14 +249,14 @@ pub const Ini = struct {
         var tokens = Lexer.init(source);
 
         var current_section: ?[]const u8 = null;
-        while (tokens.next()) |token| {
-            if (parseHeader(token)) |section| {
+        while (try tokens.next()) |token| {
+            if (try parseHeader(token)) |section| {
                 current_section = section;
             } else {
                 const line_tokens = [3][]const u8{
                     token,
-                    tokens.next() orelse return ParserError.ExpectedToken,
-                    tokens.next() orelse return ParserError.ExpectedToken,
+                    try tokens.next() orelse return ParserError.ExpectedToken,
+                    try tokens.next() orelse return ParserError.ExpectedToken,
                 };
 
                 const line = try parseLine(line_tokens);

@@ -9,6 +9,12 @@ const c = @cImport({
 
 const FontConfig = @import("fontconfig.zig").FontConfig;
 
+pub const CursorShape = enum {
+    Underline,
+    Bar,
+    Block,
+};
+
 pub const DialogConfig = struct {
     height: i32,
     font_path: []const u8,
@@ -29,7 +35,9 @@ pub const DialogConfig = struct {
     prompt_fg: hui.Color,
 
     cursor_show: bool,
+    cursor_blink: bool,
     cursor_interval: i32,
+    cursor_shape: CursorShape,
 
     arrows_show: bool,
     arrows_text_left: []const u8,
@@ -39,7 +47,7 @@ pub const DialogConfig = struct {
 };
 
 fn next_active(filtered_len: usize, current: usize) usize {
-    if (current < filtered_len - 1) {
+    if (filtered_len > 0 and current < filtered_len - 1) {
         return current + 1;
     } else {
         return 0;
@@ -50,7 +58,10 @@ fn prev_active(filtered_len: usize, current: usize) usize {
     if (current > 0) {
         return current - 1;
     } else {
-        return filtered_len - 1;
+        if (filtered_len > 0)
+            return filtered_len - 1
+        else
+            return 0;
     }
 }
 
@@ -334,7 +345,6 @@ pub fn open_dialog(
     var active: usize = 0;
     var delta_timer = try std.time.Timer.start();
 
-    // TODO: this should be configurable
     var cursor_timer: f32 = 0;
     const cursor_interval = @intToFloat(f32, config.cursor_interval);
 
@@ -493,14 +503,30 @@ pub fn open_dialog(
 
                 if (config.cursor_show) {
                     cursor_timer += dt;
-                    if (cursor_timer < cursor_interval) {
-                        try drawRect(
-                            renderer,
-                            config.searchbar_fg,
-                            row_layout_x + box.content_offset[0] + cursor_offset + 2,
-                            box.content_offset[1] + 2,
-                            .{ 2, config.font_size },
-                        );
+                    if (!config.cursor_blink or cursor_timer < cursor_interval) {
+                        switch (config.cursor_shape) {
+                            CursorShape.Bar => try drawRect(
+                                renderer,
+                                config.searchbar_fg,
+                                row_layout_x + box.content_offset[0] + cursor_offset + 2,
+                                box.content_offset[1] + 2,
+                                .{ 2, config.font_size },
+                            ),
+                            CursorShape.Underline => try drawRect(
+                                renderer,
+                                config.searchbar_fg,
+                                row_layout_x + box.content_offset[0] + cursor_offset + 2,
+                                box.content_offset[1] + config.font_size,
+                                .{ @divFloor(config.font_size, 2), 2 },
+                            ),
+                            CursorShape.Block => try drawRect(
+                                renderer,
+                                config.searchbar_fg,
+                                row_layout_x + box.content_offset[0] + cursor_offset + 2,
+                                box.content_offset[1] + 2,
+                                .{ @divFloor(config.font_size, 2), config.font_size },
+                            ),
+                        }
                     }
                     if (cursor_timer > cursor_interval * 2.0) {
                         cursor_timer -= cursor_interval * 2.0;

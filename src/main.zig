@@ -37,8 +37,9 @@ const HoloMenuConfig = struct {
 
     cursor: struct {
         show: bool,
+        shape: []const u8,
         interval: i32,
-    } = .{ .show = true, .interval = 500 },
+    } = .{ .show = true, .shape = "bar", .interval = 500 },
 
     arrows: struct {
         show: bool,
@@ -166,6 +167,19 @@ pub fn main() !void {
         .prompt_text = config.prompt.text,
         .prompt_bg = config.prompt.bg,
         .prompt_fg = config.prompt.fg,
+        .cursor_blink = config.cursor.interval != 0,
+        .cursor_shape = blk: {
+            if (std.mem.eql(u8, config.cursor.shape, "bar")) {
+                break :blk dialog.CursorShape.Bar;
+            } else if (std.mem.eql(u8, config.cursor.shape, "block")) {
+                break :blk dialog.CursorShape.Block;
+            } else if (std.mem.eql(u8, config.cursor.shape, "underline")) {
+                break :blk dialog.CursorShape.Underline;
+            }
+
+            std.log.warn("unrecognized cursor shape: '{s}', defaulting to 'bar'", .{config.cursor.shape});
+            break :blk dialog.CursorShape.Bar;
+        },
         .cursor_show = config.cursor.show,
         .cursor_interval = config.cursor.interval,
         .arrows_show = config.arrows.show,
