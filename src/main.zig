@@ -175,10 +175,10 @@ pub fn main() !void {
                 break :blk dialog.CursorShape.Block;
             } else if (std.mem.eql(u8, config.cursor.shape, "underline")) {
                 break :blk dialog.CursorShape.Underline;
+            } else {
+                std.log.err("unrecognized cursor shape: '{s}', defaulting to \"bar\"", .{config.cursor.shape});
+                break :blk dialog.CursorShape.Bar;
             }
-
-            std.log.err("unrecognized cursor shape: '{s}', defaulting to \"bar\"", .{config.cursor.shape});
-            break :blk dialog.CursorShape.Bar;
         },
         .cursor_show = config.cursor.show,
         .cursor_interval = config.cursor.interval,
